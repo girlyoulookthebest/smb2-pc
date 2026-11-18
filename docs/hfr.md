@@ -135,6 +135,10 @@ per pair).
 | `HFR_TAG(EFFECT, uid)` | effect.c `g_draw_effects` | particles: spawn / die without order shifts |
 | `HFR_TAG(STAGE_IG, i)` | stage_draw.c `g_draw_stage_models` | animated stage parts per item group |
 | `HFR_TAG(BG, ...)` | bg_lava.c embers, bg_wat2.c ambient particles, bg_pot.c bubbles | camera-space quads that all look alike: without a tag a particle that appears / disappears shifts the nearest-first pairing, and an in-between frame sweeps sparks between neighbours several units apart |
+| `HFR_TAG(MINI, i)` | race2_2.c `fn_10_C69C` speed / recover plates | one mesh x 40 per course, drawn through the depth sort: the order changes as the camera approaches, and untagged in-between frames drew plates between neighbours or with pieces missing (flicker) |
+| `HFR_TAG(MINI, player)` | race2_2.c `fn_10_D090` racer labels | one label model coloured per racer, depth-sorted: overtakes swapped the pairing and in-between frames showed a label in a blend of two racers' colours |
+| `HFR_TAG(BG, list/index)` | background.c `g_render_foreground_objects` | stage background / foreground models repeat one mesh and are culled or blinked one by one (bowling marquee bulbs): each change shifted the pairing of the copies after it |
+| `HFR_TAG(STAGE_INST, j)` | stage_draw.c `g_draw_stage_models`, model references and instances inside the item group's tag | many copies of one model (title-screen palms): one leaving the view made a palm crown fly between two palms |
 | `HFR_NODE_ALLOC/BEGIN/END` | ord_tbl.c | depth-sorted draws (drawn later, in another order) keep the tag they were queued under |
 | `HFR_VIEW(cam, view)` | camera.c `camera_apply_viewport[_2]`, default projection | camera view per tick: cut when it turns > 43 deg or moves more than 3x its speed + 3 units in one tick |
 | `HFR_CUT(CAMERA_RESET)` | camera.c `camera_clear` | stage start, respawn, replay / mode camera resets.  Soft: cuts only if a camera view then moved more than 1.5x its recent speed + 0.5 units or turned > 10 deg (baseball's intro pan resets its camera every tick while panning smoothly) |
