@@ -781,6 +781,14 @@ static u8 unit_to_u8(float f)
 #define TEV_LAYER_WORLD_SPECULAR2 (1u << 20) /* asm type mask 0x10A003 */
 
 static u32 s_avdisp_flag_320; /* lbl_80199320 (TEV material callback), below */
+/* byte 0 of the GC material cache (lbl_80194160): set to 1 per model by
+ * g_avdisp_smth_with_tex_materials (asm 0x80067558, only without a custom
+ * material callback), cleared after each shape's material (0x80067A98).
+ * The TEV material callback gets it as BallEnvArg.unk0: bg_wat2's caustics
+ * (fn_1_8711C / fn_1_873C0) skip their TEV / texture setup for a shape when
+ * it is 0 and the stage indices match the last call, so it must be 1 for
+ * the first shape of each model, whose GX state another model overwrote. */
+static int s_material_first;
 extern void GXSetTexCoordGen(int dst, int func, int src, int mtx);
 extern void GXSetNumTexGens(u8 n);
 extern void GXSetTevColor(int id, GXColor color);
@@ -1201,7 +1209,7 @@ static void build_tev_material(struct GMAModel *model, struct GMAShape *shape)
     if (s_avdisp_flag_320 != 0) {                   /* material callback */
         struct BallEnvArg arg;
 
-        arg.unk0 = 0;
+        arg.unk0 = s_material_first;
         arg.shape = (struct BallEnvShape *)shape;
         arg.unk8 = layers;
         arg.tev = tev;
@@ -1246,6 +1254,7 @@ static void build_tev_material(struct GMAModel *model, struct GMAShape *shape)
     }
     GXSetNumTexGens((u8)tev.texCoordId);
     s_post_in_tev = 1;
+    s_material_first = 0;
 }
 
 /* Material setup shared by the static and deformable shape paths: build
@@ -1693,6 +1702,8 @@ static void draw_model(struct GMAModel *model, int drawOpaque,
     }
 
     material_begin_model(model);
+    if (s_custom_material_cb == 0)  /* asm 0x80069B5C-0x80069B70 */
+        s_material_first = 1;
     if (model->flags & (GCMF_SKIN | GCMF_EFFECTIVE)) {
         u8 *ph = (u8 *)model + model->headerSize;
 

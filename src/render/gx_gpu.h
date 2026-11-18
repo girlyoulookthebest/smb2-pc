@@ -31,7 +31,7 @@ typedef struct {
     float texmtx[8][16];
     int   mode[4];         /* gx_mode (effective), ui_tev, has_tex, uvclamp */
     int   tg[4];           /* posmask, srcsel, nrmmask, normmask */
-    int   tg2[4];          /* postmask, tex_valid, 0, 0 */
+    int   tg2[4];          /* postmask, tex_valid, mtx2x4 mask (q = 1), 0 */
     int   acmp[4];         /* comp0, comp1, op, ref0 | ref1 << 8 */
     float tev_c0[4];
     float tev_c1[4];

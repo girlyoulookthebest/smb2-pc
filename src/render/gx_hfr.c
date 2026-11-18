@@ -206,19 +206,69 @@ static uint64_t fnv(uint64_t h, const void* data, size_t n) {
     return h;
 }
 
-/* TEV configuration without the animated values (lights, konst, regs) */
+/* TEV configuration without the animated values (lights, konst, regs), of
+ * the stages the draw runs only (GX keeps the setup of unused stages from
+ * whatever was drawn before) */
+static int tc_nstages(const GxTevConsts* t) {
+    return t->misc[0] < 1 ? 1 : (t->misc[0] > 8 ? 8 : t->misc[0]);
+}
 static uint64_t tc_config_hash(const GxTevConsts* t) {
     uint64_t h = 1469598103934665603ULL;
+    size_t n = (size_t)tc_nstages(t);
     h = fnv(h, t->chan, sizeof t->chan);
     h = fnv(h, t->chanfn, sizeof t->chanfn);
-    h = fnv(h, t->cin, sizeof t->cin);
-    h = fnv(h, t->ain, sizeof t->ain);
-    h = fnv(h, t->cop, sizeof t->cop);
-    h = fnv(h, t->aop, sizeof t->aop);
-    h = fnv(h, t->ord, sizeof t->ord);
-    h = fnv(h, t->misc, sizeof t->misc);
-    h = fnv(h, t->iord, sizeof t->iord);
-    h = fnv(h, t->tind, sizeof t->tind);
+    h = fnv(h, t->cin, n * sizeof t->cin[0]);
+    h = fnv(h, t->ain, n * sizeof t->ain[0]);
+    h = fnv(h, t->cop, n * sizeof t->cop[0]);
+    h = fnv(h, t->aop, n * sizeof t->aop[0]);
+    h = fnv(h, t->ord, n * sizeof t->ord[0]);
+    h = fnv(h, t->tind, n * sizeof t->tind[0]);
+    h = fnv(h, t->misc, 2 * sizeof t->misc[0]);
+    if (t->misc[1]) {   /* indirect stages only when a TEV stage reads them */
+        int ni = t->misc[2] < 0 ? 0 : (t->misc[2] > 4 ? 4 : t->misc[2]);
+        h = fnv(h, &t->misc[2], sizeof t->misc[2]);
+        h = fnv(h, t->iord, (size_t)ni * sizeof t->iord[0]);
+    }
+    return h;
+}
+
+/* bound textures and texgen setup the draw reads: the GXFX
+ * path reads the texture maps / coordinates of its active TEV and indirect
+ * stages, the fixed paths texture 0 / coordinate 0 */
+static uint64_t used_state_hash(uint64_t h, const GxDrawCall* d) {
+    const GxTevConsts* t = d->tc;
+    unsigned maps = 0, coords = 0;
+    int k, tg[4];
+    if (d->dc->mode[0]) {
+        int n = tc_nstages(t);
+        for (k = 0; k < n; k++)
+            if (t->ord[k][1] >= 0 && t->ord[k][1] < 8) {
+                maps |= 1u << t->ord[k][1];
+                if (t->ord[k][0] >= 0 && t->ord[k][0] < 8) coords |= 1u << t->ord[k][0];
+            }
+        if (t->misc[1]) {
+            int ni = t->misc[2] < 0 ? 0 : (t->misc[2] > 4 ? 4 : t->misc[2]);
+            for (k = 0; k < ni; k++) {
+                if (t->iord[k][1] >= 0 && t->iord[k][1] < 8) maps |= 1u << t->iord[k][1];
+                if (t->iord[k][0] >= 0 && t->iord[k][0] < 8) coords |= 1u << t->iord[k][0];
+            }
+        }
+    } else {
+        maps = 7;   /* as before: texture maps 0-2 */
+        coords = 1;
+    }
+    for (k = 0; k < 8; k++)
+        if (maps & (1u << k)) h = fnv(h, &s_trk.tex[k], sizeof(void*));
+    tg[0] = d->dc->tg[0] & (int)coords;
+    tg[1] = 0;
+    for (k = 0; k < 8; k++)
+        if (coords & (1u << k)) tg[1] |= d->dc->tg[1] & (3 << (2 * k));
+    tg[2] = d->dc->tg[2] & (int)coords;
+    tg[3] = d->dc->tg[3] & (int)coords;
+    h = fnv(h, &maps, sizeof maps);
+    h = fnv(h, tg, sizeof tg);
+    k = d->dc->tg2[2] & (int)coords;    /* MTX2x4 texgens */
+    h = fnv(h, &k, sizeof k);
     return h;
 }
 
@@ -421,16 +471,18 @@ static void rec_draw(const GxDrawCall* d) {
     }
     s->nverts += nv;
     s->ndcs++;
-    /* keys: the loose one (identity, shape) and the full one (+ textures,
-     * modes, TEV configuration) */
+    /* keys: the loose one (identity, shape) and the full one (+ modes and
+     * the textures / texgens / TEV configuration the draw reads: the setup
+     * GX keeps from earlier draws changed the key whenever an earlier draw
+     * changed - a dogfight monkey then fell to the loose key and broke into
+     * pieces - or told copies of one model apart by their draw order) */
     h = fnv(h, &s_tag, sizeof s_tag);
     h = fnv(h, &d->prim, sizeof d->prim);
     h = fnv(h, &d->nverts, sizeof d->nverts);
     h = fnv(h, &d->depth_clamp, sizeof d->depth_clamp);
     h2 = h;
-    for (k = 0; k < 3; k++) h = fnv(h, &s_trk.tex[k], sizeof(void*));
     h = fnv(h, d->dc->mode, sizeof d->dc->mode);
-    h = fnv(h, d->dc->tg, sizeof d->dc->tg);
+    h = used_state_hash(h, d);
     h = fnv(h, &s->tc_hash[r->tc], sizeof(uint64_t));
     r->key = h;
     r->key2 = h2;
@@ -776,19 +828,25 @@ static float jump_thresh(const HfrDraw* c, int strict) {
     return strict ? 1.0f + 0.1f * v3len(c->pos) : 4.0f + 0.25f * v3len(c->pos);
 }
 
+/* orientation difference of two modelviews (sum of |delta| of the
+ * normalised 3x3, ~1.7 per 30 deg) */
+static float ori_diff(const HfrDraw* p, const HfrDraw* c) {
+    float r = 0.0f;
+    int k;
+    for (k = 0; k < 9; k++) r += fabsf(p->ori[k] - c->ori[k]);
+    return r;
+}
+
 /* pairing distance: the view-space move, plus (for model draws) how far
  * apart the meshes are in model space - the pieces of one model drawn with
  * one modelview differ there, the same piece never does */
 static float pair_dist(const HfrDraw* p, const HfrDraw* c) {
     float d = v3dist(p->pos, c->pos);
     if (p->model && c->model) {
-        float r = 0.0f;
-        int k;
         d += 4.0f * (v3dist(p->v0, c->v0) + v3dist(p->vl, c->vl));
         /* orientation: identical meshes placed at other angles (tiles of
          * one object) are other pieces; ~ 1 unit per 30 deg of turn */
-        for (k = 0; k < 9; k++) r += fabsf(p->ori[k] - c->ori[k]);
-        d += 0.6f * r;
+        d += 0.6f * ori_diff(p, c);
     }
     return d;
 }
@@ -807,6 +865,22 @@ static int pair_ok(const HfrDraw* p, const HfrDraw* c, float d, float jt) {
 static void pair(HfrStream* P, HfrStream* C, int j, int i) {
     P->draws[j].match = i;
     C->draws[i].match = j;
+}
+
+/* one more pair of an in-order run (ref: the previous pair's move, updated) */
+static int run_step(const HfrDraw* p, const HfrDraw* c, float* ref, int have_ref) {
+    float m[3] = { c->pos[0] - p->pos[0], c->pos[1] - p->pos[1], c->pos[2] - p->pos[2] };
+    float d = v3len(m), e[3];
+    if (p->model != c->model) return 0;
+    if (p->model && (memcmp(p->v0, c->v0, sizeof p->v0) != 0 || memcmp(p->vl, c->vl, sizeof p->vl) != 0)) return 0;
+    if (d > jump_thresh(c, 0)) return 0;
+    if (d > near_thresh(c)) {
+        if (!have_ref) return 0;
+        e[0] = m[0] - ref[0]; e[1] = m[1] - ref[1]; e[2] = m[2] - ref[2];
+        if (v3len(e) > near_thresh(c)) return 0;
+    }
+    ref[0] = m[0]; ref[1] = m[1]; ref[2] = m[2];
+    return 1;
 }
 
 static void group_assign(HfrStream* P, HfrStream* C, const KeyRef* pg, int np,
@@ -865,24 +939,74 @@ static void group_assign(HfrStream* P, HfrStream* C, const KeyRef* pg, int np,
         return;
     }
     /* in order when each pair is the same mesh (equal model-space vertex)
-     * within jump range, or everything is close */
-    for (i = 0; ok && i < n; i++) {
-        const HfrDraw* p = &P->draws[pg[i].idx];
-        const HfrDraw* c = &C->draws[cg[i].idx];
-        float d = v3dist(p->pos, c->pos);
-        if (p->model && c->model) {
-            /* model draws: the same mesh (equal model-space vertex), and
-             * not suddenly turned the other way */
-            if (memcmp(p->v0, c->v0, sizeof p->v0) != 0 || memcmp(p->vl, c->vl, sizeof p->vl) != 0 ||
-                d > jump_thresh(c, 0))
+     * within jump range, or everything is close.  Both relative to the
+     * group's mean move: a skinned (CPU-transformed) monkey passing the
+     * camera moves farther in a tick than its pieces are apart (nearest-
+     * first then blended vertices between pieces), and copies of one model
+     * drawn in another order this tick (dogfight) are the same mesh in
+     * jump range but each moved away from the group, with a nearer copy
+     * of the same orientation at hand (a camera turn changes the
+     * orientation of every copy alike). */
+    if (ok && n > 0) {
+        float mv[3] = { 0.0f, 0.0f, 0.0f };
+        for (i = 0; i < n; i++) {
+            const HfrDraw* p = &P->draws[pg[i].idx];
+            const HfrDraw* c = &C->draws[cg[i].idx];
+            mv[0] += c->pos[0] - p->pos[0]; mv[1] += c->pos[1] - p->pos[1]; mv[2] += c->pos[2] - p->pos[2];
+        }
+        mv[0] /= (float)n; mv[1] /= (float)n; mv[2] /= (float)n;
+        for (i = 0; ok && i < n; i++) {
+            const HfrDraw* p = &P->draws[pg[i].idx];
+            const HfrDraw* c = &C->draws[cg[i].idx];
+            float d = v3dist(p->pos, c->pos);
+            float e[3] = { c->pos[0] - p->pos[0] - mv[0], c->pos[1] - p->pos[1] - mv[1],
+                           c->pos[2] - p->pos[2] - mv[2] };
+            int with_group = v3len(e) <= near_thresh(c);
+            if (p->model && c->model) {
+                /* model draws: the same mesh (equal model-space vertex), and
+                 * not suddenly turned the other way */
+                if (memcmp(p->v0, c->v0, sizeof p->v0) != 0 || memcmp(p->vl, c->vl, sizeof p->vl) != 0 ||
+                    d > jump_thresh(c, 0)) {
+                    ok = 0;
+                } else if (!with_group && d > near_thresh(c) && ori_diff(p, c) > 1.0f) {
+                    float own = pair_dist(p, c), od = ori_diff(p, c), jt = jump_thresh(c, 0);
+                    int t, lo = i - 32 < 0 ? 0 : i - 32, hi = i + 33 > n ? n : i + 33;
+                    for (t = lo; ok && t < hi; t++) {
+                        const HfrDraw* q = &P->draws[pg[t].idx];
+                        float dq;
+                        if (t == i) continue;
+                        dq = pair_dist(q, c);
+                        if (dq + near_thresh(c) < own && ori_diff(q, c) < 0.5f * od && pair_ok(q, c, dq, jt))
+                            ok = 0;
+                    }
+                }
+            } else if (d > near_thresh(c) && (!with_group || d > jump_thresh(c, 0))) {
                 ok = 0;
-        } else if (d > near_thresh(c)) {
-            ok = 0;
+            }
         }
     }
     if (ok) {   /* same count, everything close: the order is the identity */
         for (i = 0; i < n; i++) pair(P, C, pg[i].idx, cg[i].idx);
         return;
+    }
+    if (!strict && n > 0) {
+        /* draws appeared / disappeared (or were reordered) inside the
+         * group: the runs at its start and end that are still in order
+         * pair in order (a run starts at a pair that stayed close and goes
+         * on while the same mesh moves like its predecessor), the rest
+         * below.  Merged groups of one small mesh (the quads of two guns)
+         * otherwise paired by proportional position or nearest piece. */
+        float ref[3];
+        int a = 0, b = 0;
+        while (a < n && run_step(&P->draws[pg[a].idx], &C->draws[cg[a].idx], ref, a > 0)) a++;
+        while (b < n - a && run_step(&P->draws[pg[np - 1 - b].idx], &C->draws[cg[nc - 1 - b].idx], ref, b > 0)) b++;
+        if (a + b > 0) {
+            for (i = 0; i < a; i++) pair(P, C, pg[i].idx, cg[i].idx);
+            for (i = 0; i < b; i++) pair(P, C, pg[np - 1 - i].idx, cg[nc - 1 - i].idx);
+            if (np - a - b > 0 && nc - a - b > 0)
+                group_assign(P, C, pg + a, np - a - b, cg + a, nc - a - b, strict);
+            return;
+        }
     }
     if ((long)np * nc <= 4096) {
         /* nearest first, each draw used once */

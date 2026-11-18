@@ -69,15 +69,28 @@ the texture).  A texture re-uploaded during tick C that stream P uses
 ### Matching (hfr_tick_end)
 
 Each draw gets two keys.  The full key: identity tag (section 3),
-primitive, vertex count, 2D flag, bound textures 0-2, draw modes / texgen
-masks, TEV / channel / indirect configuration (without the animated values:
-lights, konst and register colours).  The loose key: tag, primitive,
-vertex count, 2D flag.
+primitive, vertex count, 2D flag, draw modes, and the state the draw
+actually reads: the textures / texgen masks of the texture maps and
+coordinates its active TEV (and indirect) stages use (texture maps 0-2 and
+coordinate 0 on the fixed paths), and the TEV / channel / indirect
+configuration of the active stages only (without the animated values:
+lights, konst and register colours).  GX keeps the setup of unused stages
+and texgens from whatever was drawn before, so hashing it gave an object
+another key whenever an earlier draw changed (a dogfight monkey passing the
+camera then fell back to the loose key and broke into pieces).  The loose
+key: tag, primitive, vertex count, 2D flag.
 
 1. Per full key, the draws of P and C pair **in order** when that is
    consistent: same count, and every pair is the same mesh (model draws:
    equal model-space first and last vertex) or (CPU-transformed draws)
-   close in view space.
+   close in view space, both relative to the group's mean move: a skinned
+   monkey passing the camera moves farther in one tick than its pieces are
+   apart, and copies of one model drawn in another order (a model pair
+   that left the group's move while a copy of the same orientation is much
+   nearer) are not in order.  When draws appeared / disappeared inside the
+   group, the runs at its start and end that are still in order pair in
+   order (a run starts at a pair that stayed close and continues while the
+   same mesh moves like its predecessor); the rest goes on to step 2.
 2. Otherwise **nearest first**: candidate pairs within the jump distance,
    sorted by a distance made of the view-space move, the model-space
    first/last vertex distance x4 (the same mesh is ~0, a neighbouring strip

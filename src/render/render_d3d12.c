@@ -38,7 +38,7 @@ static const char* s_hlsl =
 "    float4x4 u_texmatrix[8];\n"
 "    int4 u_mode;\n"        /* gx_mode, ui_tev, has_tex, uvclamp */
 "    int4 u_tg;\n"          /* posmask, srcsel, nrmmask, normmask */
-"    int4 u_tg2;\n"         /* postmask, tex_valid */
+"    int4 u_tg2;\n"         /* postmask, tex_valid, mtx2x4 mask (q = 1) */
 "    int4 u_gx_acmp;\n"
 "    float4 u_tev_c0;\n"
 "    float4 u_tev_c1;\n"
@@ -157,9 +157,11 @@ static const char* s_hlsl =
 "        float2 vt = mul(u_texmatrix[i], float4(tsrc, 0.0, 1.0)).xy;\n"
 "        if (((u_tg.x >> i) & 1) != 0) {\n"
 "            o.v_tcq[i] = mul(u_texmatrix[i], float4(v.a_position, 1.0)).xyz;\n"
+"            if (((u_tg2.z >> i) & 1) != 0) o.v_tcq[i].z = 1.0;\n"
 "            if (u_mode.x == 0) vt = v.a_texcoord0;\n"
 "        } else if (((u_tg.z >> i) & 1) != 0) {\n"
 "            float3 t = mul(u_texmatrix[i], float4(v.a_normal, 1.0)).xyz;\n"
+"            if (((u_tg2.z >> i) & 1) != 0) t.z = 1.0;\n"
 "            if (((u_tg.w >> i) & 1) != 0 && dot(t, t) > 0.0) t = normalize(t);\n"
 "            if (((u_tg2.x >> i) & 1) != 0) t = mul(u_tg_post[i], float4(t, 1.0)).xyz;\n"
 "            o.v_tcq[i] = t;\n"

@@ -2736,6 +2736,11 @@ void gx_texcoord_n2f32(int n, float s, float t) {
 /* per texgen: normalize flag and post matrix id (GX_PTIDENTITY = 125) */
 static int s_tg_norm[8];
 static int s_tg_post[8] = {125, 125, 125, 125, 125, 125, 125, 125};
+/* per texgen: GX_TG_MTX3x4 (0) or GX_TG_MTX2x4 (1).  A 2x4 texgen uses only
+ * the first two matrix rows and q = 1: the water caustics run the position
+ * through mtxa-based 3x4 matrices with GX_TG_MTX2x4, and dividing by the
+ * third row smeared them into streaks radiating from the camera. */
+static int s_tg_func[8] = {1, 1, 1, 1, 1, 1, 1, 1};
 /* GX_PTTEXMTX0..19 = ids 64, 67 .. 121 */
 #define TEX_NUM_PTMTX 20
 static Mtx s_ptmtx[TEX_NUM_PTMTX];
@@ -2747,12 +2752,12 @@ static int tex_ptmtx_index(int id) {
 }
 
 static void tex_rec_texgen(int dst, int func, int src, int normalize, int postMtx) {
-    (void)func;
     if (dst < 0 || dst >= 8) return;
     normalize = normalize != 0;
     if (s_tg_src[dst] == src && s_tg_norm[dst] == normalize &&
-        s_tg_post[dst] == postMtx) return;
+        s_tg_post[dst] == postMtx && s_tg_func[dst] == func) return;
     tex_flush();
+    s_tg_func[dst] = func;
     s_tg_src[dst] = src;
     s_tg_norm[dst] = normalize;
     s_tg_post[dst] = postMtx;
@@ -2872,6 +2877,12 @@ static void tex_ext_build(GxCore* gl) {
     for (i = 0; i < 8; i++)
         if (s_tg_src[i] == 0 /* GX_TG_POS */) posmask |= 1 << i;
     s_dc.tg[0] = posmask;
+    {
+        int q1mask = 0;
+        for (i = 0; i < 8; i++)
+            if (s_tg_func[i] == 1 /* GX_TG_MTX2x4 */) q1mask |= 1 << i;
+        s_dc.tg2[2] = q1mask;
+    }
     /* fog is a perspective-only effect here (ortho fog bit 3 unsupported) */
     if (s_fog_on && !s_fog_shape_off && s_fog_type != 0 && !(s_fog_type & 8) && gl->projection_type == 0) {
         s_dc.fog[0] = (float)s_fog_type; s_dc.fog[1] = s_fog_start;

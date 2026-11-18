@@ -320,7 +320,7 @@ typedef struct {
     GLint u_lpos, u_ldir, u_lcos, u_ldist, u_lcol;
     GLint u_tev_n, u_tex_valid, u_cin, u_ain, u_cop, u_aop, u_ord, u_konst, u_reg, u_acmp;
     GLint u_ind_on, u_ind_n, u_iord, u_imtx, u_tind;
-    GLint l_fog, l_fogc, l_posmask, l_srcsel, l_nrmmask, l_normmask, l_postmask, l_post;
+    GLint l_fog, l_fogc, l_posmask, l_srcsel, l_nrmmask, l_normmask, l_postmask, l_q1mask, l_post;
     unsigned tev_serial;   /* GxTevConsts serial last uploaded (TEV part) */
     unsigned post_serial;  /* ... (texgen post matrices) */
 
@@ -364,6 +364,7 @@ static const char* vertex_shader_source =
     "uniform int u_tg_nrmmask;\n"   /* bit i: texgen i uses GX_TG_NRM */
     "uniform int u_tg_normmask;\n"  /* bit i: normalize before the post matrix */
     "uniform int u_tg_postmask;\n"  /* bit i: apply the dual-tex post matrix */
+    "uniform int u_tg_q1mask;\n"    /* bit i: GX_TG_MTX2x4 (q = 1) */
     "uniform mat4 u_tg_post[8];\n"  /* GX_PTTEXMTXn per texgen */
     "out vec3 v_tcq[8];\n"          /* texgen through MTX3x4: s,t,q */
     "out float v_eyez;\n"
@@ -431,6 +432,7 @@ static const char* vertex_shader_source =
      * legacy-path UV draws that follow (they get the raw UVs instead). */
     "        if (((u_tg_posmask >> i) & 1) != 0) {\n"
     "            v_tcq[i] = (u_texmatrix[i] * vec4(a_position, 1.0)).xyz;\n"
+    "            if (((u_tg_q1mask >> i) & 1) != 0) v_tcq[i].z = 1.0;\n"
     "            if (u_gx_mode == 0) v_texcoord[i] = a_texcoord0;\n"
     /* GX_TG_NRM texgen (sphere/env/specular maps): the model-space normal
      * (input form ABC1) through the texgen matrix, optionally normalized,
@@ -438,6 +440,7 @@ static const char* vertex_shader_source =
      * the GXFX TEV path reads the result. */
     "        } else if (((u_tg_nrmmask >> i) & 1) != 0) {\n"
     "            vec3 t = (u_texmatrix[i] * vec4(a_normal, 1.0)).xyz;\n"
+    "            if (((u_tg_q1mask >> i) & 1) != 0) t.z = 1.0;\n"
     "            if (((u_tg_normmask >> i) & 1) != 0 && dot(t, t) > 0.0) t = normalize(t);\n"
     "            if (((u_tg_postmask >> i) & 1) != 0) t = (u_tg_post[i] * vec4(t, 1.0)).xyz;\n"
     "            v_tcq[i] = t;\n"
@@ -926,6 +929,7 @@ static bool init_shaders(GLBackend* backend) {
     backend->l_nrmmask = glGetUniformLocation(prog, "u_tg_nrmmask");
     backend->l_normmask = glGetUniformLocation(prog, "u_tg_normmask");
     backend->l_postmask = glGetUniformLocation(prog, "u_tg_postmask");
+    backend->l_q1mask = glGetUniformLocation(prog, "u_tg_q1mask");
     backend->l_post = glGetUniformLocation(prog, "u_tg_post");
     {   /* the initial GX state's UI TEV colours (core: C0 = 1, C1 = 0) */
         static const float one[4] = { 1.0f, 1.0f, 1.0f, 1.0f };
@@ -1348,6 +1352,7 @@ static void glb_upload(GLBackend* gl, const GxDrawCall* d) {
     uc_1i(gl->l_nrmmask, dc->tg[2]);
     uc_1i(gl->l_normmask, dc->tg[3]);
     uc_1i(gl->l_postmask, dc->tg2[0]);
+    uc_1i(gl->l_q1mask, dc->tg2[2]);
     if (gl->post_serial != d->tc_serial) {
         gl->post_serial = d->tc_serial;
         uc_mat4(gl->l_post, 8, &tc->tg_post[0][0]);

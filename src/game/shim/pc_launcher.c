@@ -39,6 +39,7 @@ struct PauseMenuState
     s8 screenshotState;
 };
 extern struct PauseMenuState g_related_to_pause_menu_input;
+extern u8 lbl_1_bss_16D0;    /* sel.c struct SelSettings8: race settings, byte 0 = course */
 extern u8 lbl_1_bss_172C[];  /* sel.c struct SelSettingsH: baseball settings */
 
 void g_set_some_sel_ngc_global_func_ptrs(void (*a)(void), void (*b)(void),
@@ -182,6 +183,10 @@ static void launcher_start(const struct LauncherEntry *e)
          * pick mode 1 (1P vs COM). */
         if (e->arg1 == 15)
             lbl_1_bss_172C[0] = 1;
+        /* test hook: SMB2_PC_RACE=<0-5> picks the Monkey Race course
+         * (race2_5.c course table order: 4 = Submarine Street) */
+        if (e->arg1 == 3 && getenv("SMB2_PC_RACE"))
+            lbl_1_bss_16D0 = (u8)atoi(getenv("SMB2_PC_RACE"));
         /* the flags sel_ngc's menu_start_golf sets */
         if (e->arg1 == 8) {
             modeCtrl.courseFlags |= 4;
