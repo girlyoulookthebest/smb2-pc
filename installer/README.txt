@@ -9,6 +9,12 @@ You need your own Super Monkey Ball 2 GameCube disc image (USA, disc ID GM2E8P,
 Modded disc images work if the mod replaces game files (stages, textures,
 sounds); code mods (DOL edits, Gecko/AR codes) don't apply.
 
+Party games not playable yet
+----------------------------
+Billiards, Shot, Soccer and Tennis are not decompiled yet, so the PC version can't run
+them. Party Game Select shows them dimmed with a "NOT YET" tag (they can still be unlocked
+with Play Points). Race, Target, Bowling, Boat, Dogfight, Baseball, Golf and Monkey Fight work.
+
 Starting the game
 -----------------
 Use the "SMB2" shortcut in the Start Menu (or on the desktop).

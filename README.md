@@ -19,9 +19,11 @@ runs its own compiled code instead of the disc's `main.dol`.
 ## Features
 
 - Story Mode, Challenge Mode, Practice, options, memory-card saves and
-  replays, and the party/mini games whose code is decompiled: Monkey Race,
-  Target, Bowling, Boat, Dogfight and Baseball. (The other party games are
-  not decompiled yet and can't be played.)
+  replays, and the party games whose code is decompiled: Monkey Race,
+  Target, Bowling, Boat, Dogfight, Baseball, Golf and Monkey Fight.
+- Not playable yet (not decompiled): Billiards, Shot, Soccer and Tennis. Party Game Select shows them dimmed with a "NOT YET" tag and
+  says so in the description box; they can still be unlocked with Play
+  Points.
 - 32-bit (i686) and 64-bit (x86_64) Windows builds; saves are compatible
   between them.
 - Renderers: OpenGL 3.3 (default) and Direct3D 12 (`--renderer d3d12` or the

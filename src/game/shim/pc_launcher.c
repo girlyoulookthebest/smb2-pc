@@ -56,6 +56,7 @@ void load_additional_rel(char *name, void *rel);
 void g_something_with_sound7_and_game_heaps(int config);
 extern u8 g_some_sel_ngc_rel_buffer[];  /* sel.c: struct RelInfo of the sel REL slot */
 void disable_all_cameras(void);
+int pc_party_game_available(int gameType);   /* pc_party_avail.c */
 
 enum { L_CHALLENGE, L_PRACTICE, L_MINI };
 
@@ -79,8 +80,15 @@ static const struct LauncherEntry s_entries[] = {
     { L_MINI, "MONKEY DOGFIGHT", 0xC7, 13 },
     { L_MINI, "MONKEY BASEBALL", 0xC9, 15 },
     { L_MINI, "MONKEY GOLF",     0xBB, 8 },
+    { L_MINI, "MONKEY FIGHT",    0xBD, 4 },
 };
 #define N_ENTRIES ((int)(sizeof(s_entries) / sizeof(s_entries[0])))
+
+/* the party games this menu can't offer while pc_party_game_available()
+ * says their REL isn't linked (not decompiled yet): listed below the menu */
+static const struct { const char *name; int gameType; } s_other_games[] = {
+    { "FIGHT", 4 }, { "BILLIARDS", 6 }, { "SHOT", 9 }, { "SOCCER", 12 }, { "TENNIS", 16 },
+};
 
 static int s_cursor;
 static int s_started;
@@ -247,6 +255,18 @@ static void launcher_tick(void)
     debug_textdraw_set_pos(6, 8 + N_ENTRIES * 2 + 3);
     debug_textdraw_set_color(0x57);
     debug_textdraw_put_buf_1("UP/DOWN: choose    A: start");
+    {
+        unsigned k;
+        int any = 0;
+
+        debug_textdraw_set_pos(2, 8 + N_ENTRIES * 2 + 5);   /* the last row that shows */
+        for (k = 0; k < sizeof(s_other_games) / sizeof(s_other_games[0]); k++) {
+            if (pc_party_game_available(s_other_games[k].gameType))
+                continue;
+            debug_textdraw_put_buf_1(any++ ? " " : "NOT DECOMPILED: ");
+            debug_textdraw_put_buf_1(s_other_games[k].name);
+        }
+    }
 }
 
 static void launcher_draw(void)

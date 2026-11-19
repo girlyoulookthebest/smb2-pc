@@ -1187,6 +1187,26 @@ void g_math_unk16(Vec *src, Vec *dst, float tanHalfFov)
     }
 }
 
+/* DOL 0x80064558: transforms a point by mtxA and projects it to 640x480
+ * screen pixels (Monkey Fight's HUD labels); points at the eye plane give
+ * 10000 in both. */
+void g_math_unk15(Vec *src, Vec *dst, float tanHalfFov)
+{
+    mtxa_tf_point(src, dst);
+    if (fabsf(dst->z) > FLT_EPSILON)
+    {
+        float scale = 240.0f / (dst->z * tanHalfFov);
+
+        dst->x = 320.0f + -dst->x * scale;
+        dst->y = 240.0f + dst->y * scale;
+    }
+    else
+    {
+        dst->x = 10000.0f;
+        dst->y = 10000.0f;
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* GC SDK (Dolphin) matrix functions                                  */
 /* ------------------------------------------------------------------ */

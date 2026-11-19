@@ -12,7 +12,7 @@
 #        attract demo, so compare sheets visually):
 #   intro menus options2 challenge howto howto2 howto_race howto_bowl
 #   race racelong raceend target targetlong targetend bowling boat dogfight
-#   baseball golf golflaunch golfend story memcard quit quit_cancel quit_opt quit_f1
+#   baseball golf golflaunch golfend fight fightlaunch story memcard quit quit_cancel quit_opt quit_f1
 #   quit_title quit_ms quit_title_no
 #   ALL = every mode above.  Memory-card 32<->x64 compatibility is the
 #   separate card_xarch.sh (it needs both builds).
@@ -39,7 +39,7 @@
 #   $WS/tools/memcard_pristine  a memcard/ folder to start every run from
 #                               (e.g. an empty folder, or a copy of one with saves)
 set -u
-ALL=(intro menus options2 challenge howto2 howto_race howto_bowl race racelong raceend target targetlong targetend bowling boat dogfight baseball golf story memcard)
+ALL=(intro menus options2 challenge howto2 howto_race howto_bowl race racelong raceend target targetlong targetend bowling boat dogfight baseball golf fight story memcard)
 WS=${SMB2_X64_WS:-$(cd "$(dirname "$0")/../../.." && pwd)}
 PPM=$WS/tools/ppmtool
 PRISTINE=$WS/tools/memcard_pristine
@@ -81,6 +81,10 @@ spec() {
     # Stroke Play, 1 player, AiAi, 18 holes, then six A/A shots
     golf)      echo "0|1350:START,1450:START,1750:RIGHT,1850:A,2100:RIGHT,2140:RIGHT,2180:RIGHT,2220:RIGHT,2260:RIGHT,2350:A,2600:A,2800:A,3000:A,3200:A,3400:A,3600:A,4000:A,4070:A,5200:A,5270:A,6400:A,6470:A,7600:A,7670:A,8800:A,8870:A,10000:A,10070:A|200|11001";;
     golflaunch) echo "1|$(mini 10)|200|4001";;
+    # Monkey Fight 2 from the real Party Game menu (2nd icon), 1P + 3 COM,
+    # one win needed: a full 60 s round to the results / menu
+    fight)     echo "0|1350:START,1450:START,1750:RIGHT,1850:A,2100:RIGHT,2350:A,2600:A,2800:A,3000:A,3200:A,3400:A,3600:A,3700-3900:SU,3950:A,4100-4300:SL,4400:A,4500-4700:SR,4800:A,5000-5200:SD,5300:A,7800:A,8000:A,8200:A,8400:A|200|9001";;
+    fightlaunch) echo "1|$(mini 11),3000-3300:SU,3300:A,3400-3600:SL,3700:A,3900-4200:SR,4300:A,4500-4800:SD,4900:A|300|6001";;
     # A full golf round to the end with the DIP_TEST_TEAM debug keys (run_mode
     # sets SMB2_PC_DIP=20000000): L+A per stroke, L+RIGHT next hole, then
     # results, name entry (AAAAAA), ranking, Options > Game Data > Save and

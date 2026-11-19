@@ -232,6 +232,7 @@ extern void boatPrologue(void), boatEpilogue(void);
 extern void dogfightPrologue(void), dogfightEpilogue(void);
 extern void baseballPrologue(void), baseballEpilogue(void);
 extern void golfPrologue(void), golfEpilogue(void);
+extern void fightPrologue(void), fightEpilogue(void);
 void pc_test_dip_apply(void);   /* pc_launcher.c: SMB2_PC_DIP test hook */
 
 static const struct { const char *name; void (*pro)(void); void (*epi)(void); }
@@ -247,23 +248,44 @@ s_linked_rels[] = {
     { "mkb2.dogfight.rel",         dogfightPrologue,   dogfightEpilogue },
     { "mkb2.baseball.rel",         baseballPrologue,   baseballEpilogue },
     { "mkb2.golf2.rel",            golfPrologue,       golfEpilogue },
+    { "mkb2.mini_fight2.rel",      fightPrologue,      fightEpilogue },
 };
+
+static int rel_find(const char *name)
+{
+    unsigned i;
+
+    for (i = 0; name && i < sizeof(s_linked_rels) / sizeof(s_linked_rels[0]); i++)
+        if (strcmp(name, s_linked_rels[i].name) == 0)
+            return (int)i;
+    return -1;
+}
+
+/* The one answer to "is this REL's code in the exe": the menus mark the party
+ * games whose REL is not (pc_party_avail.c), so a newly linked game shows up
+ * as playable without further changes. */
+int pc_rel_is_linked(const char *name)
+{
+    return rel_find(name) >= 0;
+}
+
+/* test hook: SMB2_PC_TEST_REL=<name> makes loading that REL fail as if it
+ * were not linked (the menus still offer it), to exercise the failed-load
+ * paths (mini_mode.c returns to the menu) */
+static int rel_test_unlinked(const char *name)
+{
+    const char *e = getenv("SMB2_PC_TEST_REL");
+    return e && e[0] && strcmp(e, name) == 0;
+}
 
 static int rel_fill_fake_header(const char *name, void *buffer, u32 size)
 {
     struct RelModuleHeaderShim *h = (struct RelModuleHeaderShim *)buffer;
-    void (*pro)(void) = 0, (*epi)(void) = 0;
-
-    unsigned i;
+    int i;
 
     pc_test_dip_apply();
-    for (i = 0; i < sizeof(s_linked_rels) / sizeof(s_linked_rels[0]); i++)
-        if (strcmp(name, s_linked_rels[i].name) == 0) {
-            pro = s_linked_rels[i].pro;
-            epi = s_linked_rels[i].epi;
-            break;
-        }
-    if (!pro) {
+    i = rel_find(name);
+    if (i < 0 || rel_test_unlinked(name)) {
         fprintf(stderr, "[REL] %s is not linked into this build - load fails\n", name);
         return 0;
     }
@@ -271,8 +293,8 @@ static int rel_fill_fake_header(const char *name, void *buffer, u32 size)
         return 0;
     memset(buffer, 0, sizeof(*h));
     h->bssSize = 32;    /* REL bss objects are linked statically already */
-    h->prolog  = pro;
-    h->epilog  = epi;
+    h->prolog  = s_linked_rels[i].pro;
+    h->epilog  = s_linked_rels[i].epi;
     fprintf(stderr, "[REL] dispatching %s to linked-in module\n", name);
     return 1;
 }
