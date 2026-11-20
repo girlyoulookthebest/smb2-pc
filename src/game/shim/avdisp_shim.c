@@ -804,6 +804,37 @@ static GXTexObj s_rampTex;
 static u8 s_rampImg[64] __attribute__((aligned(32)));
 static int s_rampInit;
 
+/* blend factors of a shape, GC GXBlendFactor encoding (SMB1 ref
+ * init_tev_material_cache, avdisp.c:1513): default SRCALPHA/INVSRCALPHA,
+ * overridable per shape from blendFactors.  (The asm also checks the
+ * overrides lbl_80199340 / lbl_8019933C, which are only ever -1 = none.) */
+static void shape_blend_factors(const struct GMAShape *shape, u32 *src, u32 *dst)
+{
+    *src = 4;                                       /* GC GX_BL_SRCALPHA */
+    *dst = 5;                                       /* GC GX_BL_INVSRCALPHA */
+    if (shape->flags & SHAPE_FLAG_CUSTOM_BLEND_SRC)
+        *src = shape->blendFactors & 0xF;
+    if (shape->flags & SHAPE_FLAG_CUSTOM_BLEND_DST)
+        *dst = (shape->blendFactors >> 4) & 0xF;
+}
+
+/* blend src/dst of the GC material cache (lbl_80194160+0x24/+0x28) */
+static int s_blendCache[2] = { -1, -1 };
+
+/* asm g_avdisp_smth_with_tex_materials 0x800676A4-0x800676F8 (per model,
+ * only without a custom material callback): cache and set the first
+ * shape's blend */
+static void material_begin_model_blend(struct GMAShape *first)
+{
+    u32 src, dst;
+
+    shape_blend_factors(first, &src, &dst);
+    s_blendCache[0] = (int)src;
+    s_blendCache[1] = (int)dst;
+    GXSetBlendMode_cached(1 /* GX_BM_BLEND */, map_blend_factor(src),
+                          map_blend_factor(dst), 0 /* GX_LO_CLEAR */);
+}
+
 /* SMB1 init_tev_material_cache tail: view-space direction to the near
  * side of the model's bounding sphere */
 static void material_begin_model(struct GMAModel *model)
@@ -1343,16 +1374,19 @@ static int bind_shape_material(struct GMAModel *model, struct GMAShape *shape,
     }
     build_tev_material(model, shape);
 
-    /* blend (SMB1 ref init_tev_material_cache, avdisp.c:1513): default
-     * SRCALPHA/INVSRCALPHA, overridable per shape from blendFactors */
-    src = 4;                                        /* GC GX_BL_SRCALPHA */
-    dst = 5;                                        /* GC GX_BL_INVSRCALPHA */
-    if (shape->flags & SHAPE_FLAG_CUSTOM_BLEND_SRC)
-        src = shape->blendFactors & 0xF;
-    if (shape->flags & SHAPE_FLAG_CUSTOM_BLEND_DST)
-        dst = (shape->blendFactors >> 4) & 0xF;
-    GXSetBlendMode_cached(1 /* GX_BM_BLEND */, map_blend_factor(src),
-                          map_blend_factor(dst), 0 /* GX_LO_CLEAR */);
+    /* blend (asm g_something_with_GmaSomeStruct_GXBlendFactor 0x80067AD0,
+     * called after the TEV material and its callback): only set when the
+     * shape's factors differ from the material cache's (s_blendCache, set
+     * per model from the first shape), so a TEV material callback's own
+     * GXSetBlendMode survives the shapes that use the model's blend (the
+     * additive ball environment pass, e.g. bg_wat2 fn_1_87A0C) */
+    shape_blend_factors(shape, &src, &dst);
+    if ((int)src != s_blendCache[0] || (int)dst != s_blendCache[1]) {
+        GXSetBlendMode_cached(1 /* GX_BM_BLEND */, map_blend_factor(src),
+                              map_blend_factor(dst), 0 /* GX_LO_CLEAR */);
+        s_blendCache[0] = (int)src;
+        s_blendCache[1] = (int)dst;
+    }
     return textured;
 }
 
@@ -1702,8 +1736,14 @@ static void draw_model(struct GMAModel *model, int drawOpaque,
     }
 
     material_begin_model(model);
-    if (s_custom_material_cb == 0)  /* asm 0x80069B5C-0x80069B70 */
+    if (s_custom_material_cb == 0) {  /* asm 0x80069B5C-0x80069B70 */
+        /* first shape: the deformable shape headers follow a 0x20 header */
+        u8 *first = (u8 *)model + model->headerSize;
+        if (model->flags & (GCMF_SKIN | GCMF_EFFECTIVE))
+            first += 0x20;
         s_material_first = 1;
+        material_begin_model_blend((struct GMAShape *)first);
+    }
     if (model->flags & (GCMF_SKIN | GCMF_EFFECTIVE)) {
         u8 *ph = (u8 *)model + model->headerSize;
 

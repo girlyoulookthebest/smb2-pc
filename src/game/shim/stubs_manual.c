@@ -60,6 +60,10 @@ int lbl_80198B38 = 60;
 float lbl_80198B34 = 60.0f;
 int lbl_80198B3C = 0;
 
+/* DOL .sdata constant 0x80198AC0 (bits 0x7FFFFFFF, a NaN): skeleton.c's
+ * inlined MSL sqrt returns it for a negative argument (was a zeroed stub) */
+unsigned int lbl_80198AC0 = 0x7FFFFFFFu;
+
 /* ---- crash diagnostics: print the faulting address, then die ---- */
 #ifdef _WIN32
 static LONG WINAPI shim_crash_filter(EXCEPTION_POINTERS *ep)

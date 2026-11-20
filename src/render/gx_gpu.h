@@ -76,6 +76,7 @@ typedef struct {
     int no_cull;               /* quads and expanded lines are never culled */
 } GxDrawCall;
 
+struct GxDisplayTiming;
 typedef struct GxGpu {
     const char* name;
     bool (*init)(int width, int height, bool vsync, int msaa);
@@ -142,7 +143,30 @@ typedef struct GxGpu {
     int (*read_frame)(unsigned char** rgb, int* w, int* h);
     int (*capture)(void);              /* F1 overlay: keep the game frame */
     void (*restore)(float brightness); /* draw it back (dimmed) */
+    /* frame pacing (optional, docs/hfr.md section 4): id of the last
+     * present (DXGI present count), 0 = not available */
+    unsigned (*present_id)(void);
+    /* the display's timing and the latest present it showed; returns 0
+     * when unknown */
+    int (*display_timing)(struct GxDisplayTiming* t);
+    /* sync interval of the following presents (vsync on): the frame stays
+     * on screen at least si refreshes (1-4) */
+    void (*present_interval)(int si);
+    /* presents that may wait for the display at once (flip queue depth,
+     * 0 = the backend's default) */
+    void (*present_queue)(int n);
+    /* mean time from a present call's return to the GPU finishing that
+     * frame since the last call, ms (GL; 0 = not available) */
+    double (*present_done_ms)(void);
 } GxGpu;
+
+typedef struct GxDisplayTiming {
+    unsigned long long vblank_ns;  /* a recent vertical blank, platform_get_time_ns clock */
+    unsigned vblank_count;         /* its refresh number */
+    double period_ns;              /* refresh period (measured) */
+    unsigned shown_id;             /* latest present on screen (present_id numbering), 0 = none */
+    unsigned shown_count;          /* refresh at which it was first shown */
+} GxDisplayTiming;
 
 extern const GxGpu gx_gpu_gl;
 #ifdef SMB2_HAVE_D3D12

@@ -1614,6 +1614,29 @@ int g_hfr_kcap = 63;
  * include the CPU's submission gaps, so the GL pacer relies on present
  * blocking and the cap) */
 static double s_gpu_est, s_gpu_win; static long s_gpu_win_n;
+/* display-grid pacer (video_shim.c): the backend's display timing, sync
+ * interval and flip queue; all optional (0 / no-op when unsupported) */
+int hfr_display_timing(unsigned long long* vb_ns, unsigned* vb_count, double* period_ns,
+                       unsigned* shown_id, unsigned* shown_count) {
+    GxDisplayTiming t;
+    if (!s_real || !s_real->display_timing || !s_real->display_timing(&t) || t.period_ns <= 0.0) return 0;
+    *vb_ns = t.vblank_ns; *vb_count = t.vblank_count; *period_ns = t.period_ns;
+    *shown_id = t.shown_id; *shown_count = t.shown_count;
+    return 1;
+}
+void hfr_present_interval(int si) { if (s_real && s_real->present_interval) s_real->present_interval(si); }
+void hfr_present_queue(int n) { if (s_real && s_real->present_queue) s_real->present_queue(n); }
+unsigned hfr_present_id(void) { return s_real && s_real->present_id ? s_real->present_id() : 0; }
+/* GL: present call -> GPU done, running estimate (ms, 0 = unknown) */
+double hfr_present_done_est_ms(void) {
+    static double est;
+    double m;
+    if (!s_real || !s_real->present_done_ms) return 0.0;
+    m = s_real->present_done_ms();
+    if (m > 0.0) est = est > 0.0 ? est * 0.8 + m * 0.2 : m;
+    return est;
+}
+
 double hfr_gpu_frame_est_ms(void) {
     double m;
     if (!s_real || !s_real->gpu_frame_ms) return 0.0;

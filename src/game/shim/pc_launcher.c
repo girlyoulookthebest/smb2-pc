@@ -93,6 +93,41 @@ static const struct { const char *name; int gameType; } s_other_games[] = {
 static int s_cursor;
 static int s_started;
 
+/* ---- SMB2_PC_STAGE and stages no Challenge course plays ------------------
+ * The hook can force any stage id into a Challenge, but the game only plays
+ * its Challenge/Story/Practice course stages under Challenge's heaps (heap
+ * config 0).  The other ids exist on the GC under other heap configs: the
+ * story cutscene sets 401-420 (author mode, config 8), the attract-demo sets
+ * 397-400 (config 0x12), the party-game courses (e.g. Monkey Boat's 140,
+ * config 6) and unused test stages.  Several don't fit config 0 and panic on
+ * the GC too when forced into a Challenge (Dolphin: 407 "tex:<bg_au_wat2.tpl>
+ * not enough memory", 415 "<bg_au_bub2.gma>", 140 "<st140.gma>"); 186's
+ * replay doesn't fit its stage heap.  alloc.c plays such a stage under config
+ * 8, everything in one main heap, as author mode does for the cutscene sets. */
+static int s_hook_stage;   /* stage the hook chose at the last start, 0 = none */
+
+static int stage_in_courses(int stageId)
+{
+    const struct CourseCommand *cmd;
+    int i, j;
+
+    for (i = 0; i < 12; i++)   /* cm_courses[]: every Challenge course */
+        for (cmd = cm_courses[i]; cmd->opcode != CMD_COURSE_END; cmd++)
+            if (cmd->opcode == CMD_FLOOR && cmd->type == FLOOR_STAGE_ID
+             && cmd->value == stageId)
+                return 1;
+    for (i = 0; i < 10; i++)   /* Story Mode worlds (Practice plays these) */
+        for (j = 0; j < sm_world_info[i].stageCount; j++)
+            if (sm_world_info[i].stages[j].stageId == stageId)
+                return 1;
+    return 0;
+}
+
+int pc_stage_hook_needs_shared_heap(void)
+{
+    return s_hook_stage > 0 && !stage_in_courses(s_hook_stage);
+}
+
 static void launcher_set_single_player(void)
 {
     modeCtrl.playerCount = 1;
@@ -116,6 +151,7 @@ void pc_test_dip_apply(void);
 static void launcher_start(const struct LauncherEntry *e)
 {
     launcher_set_single_player();
+    s_hook_stage = 0;
     switch (e->kind) {
     case L_CHALLENGE:
         modeCtrl.gameType = 0;
@@ -150,7 +186,7 @@ static void launcher_start(const struct LauncherEntry *e)
                 if (*q) q++;
             }
             if (atoi(q) > 0)
-                g_some_stage_id = (s16)atoi(q);
+                g_some_stage_id = (s16)(s_hook_stage = atoi(q));
         }
         g_another_stage_id = mode_info.currStageId = g_some_stage_id;
         /* test hook: SMB2_PC_WIDE=1 plays it in the game's 16:9 TV mode */

@@ -376,6 +376,8 @@ void pcs_on_window_resized(void) {
     if (w > 0 && h > 0) render_resize(w, h);
 }
 
+int platform_test_offscreen(void);
+
 void pcs_apply_video(void) {
     SDL_Window* win = cur_window();
     int disp = cur_display();
@@ -389,8 +391,9 @@ void pcs_apply_video(void) {
         SDL_GetWindowSize(win, &cw, &ch);
         if (cw != g_pcs.width || ch != g_pcs.height) {
             SDL_SetWindowSize(win, g_pcs.width, g_pcs.height);
-            SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED_DISPLAY(disp),
-                                  SDL_WINDOWPOS_CENTERED_DISPLAY(disp));
+            if (!platform_test_offscreen())   /* test hook, platform_sdl2.c */
+                SDL_SetWindowPosition(win, SDL_WINDOWPOS_CENTERED_DISPLAY(disp),
+                                      SDL_WINDOWPOS_CENTERED_DISPLAY(disp));
         }
         break;
     }

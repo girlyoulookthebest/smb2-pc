@@ -29,6 +29,11 @@ typedef struct {
     uint64_t start_ticks;
 } SDL2BackendData;
 
+int platform_test_offscreen(void) {
+    const char* e = getenv("SMB2_TEST_OFFSCREEN");
+    return e && e[0] == '1';
+}
+
 static const PlatformConfig* s_cfg;
 static PlatformConfig s_cfg_copy;
 
@@ -55,9 +60,16 @@ static bool sdl2_create_window(SDL2BackendData* data, const PlatformConfig* conf
         window_flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     }
 
+    /* test hook: SMB2_TEST_OFFSCREEN=1 creates the window far off-screen and
+     * shows it without activating it, for automated runs while the desktop
+     * is in use (a minimized GL window would dump black frames: the GL
+     * renderer draws into the window's own framebuffer) */
+    int offscreen = platform_test_offscreen();
+    if (offscreen) SDL_SetHint(SDL_HINT_WINDOW_NO_ACTIVATION_WHEN_SHOWN, "1");
     data->window = SDL_CreateWindow(
         config->window_title ? config->window_title : "SMB2",
-        SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+        offscreen ? -30000 : SDL_WINDOWPOS_CENTERED,
+        offscreen ? -30000 : SDL_WINDOWPOS_CENTERED,
         config->window_width, config->window_height,
         window_flags
     );
@@ -167,6 +179,12 @@ static void sdl2_poll_events(PlatformContext* ctx) {
             case SDL_WINDOWEVENT:
                 if (event.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
                     pcs_on_window_resized();   /* renderer follows the drawable */
+                {   /* SMB2_PACE_LOG: pacing measurements need the window on screen */
+                    extern int pace_log_on(void);
+                    if (pace_log_on())
+                        printf("[pacelog] window event %d at %llu\n", (int)event.window.event,
+                               (unsigned long long)platform_get_time_ns());
+                }
                 break;
             case SDL_KEYDOWN:
                 /* PC port hotkeys (game buttons are read from the keyboard
@@ -317,6 +335,23 @@ void perf_frame_end(void) {
     }
 }
 
+/* a performance-counter value (QueryPerformanceCounter on Windows, e.g.
+ * DXGI frame statistics) on the platform_get_time_ns() clock; 0 = before start */
+uint64_t platform_counter_time_ns(uint64_t counter) {
+    SDL2BackendData* data = (SDL2BackendData*)g_platform.backend_data;
+    uint64_t ticks, freq = SDL_GetPerformanceFrequency();
+    if (!data || counter < data->start_ticks) return 0;
+    ticks = counter - data->start_ticks;
+    return (ticks / freq) * 1000000000ULL + ((ticks % freq) * 1000000000ULL) / freq;
+}
+
+/* the performance counter at time 0 of platform_get_time_ns and its rate */
+uint64_t platform_counter_origin(uint64_t* freq) {
+    SDL2BackendData* data = (SDL2BackendData*)g_platform.backend_data;
+    *freq = SDL_GetPerformanceFrequency();
+    return data ? data->start_ticks : 0;
+}
+
 static uint64_t sdl2_get_time_ns(PlatformContext* ctx) {
     SDL2BackendData* data = (SDL2BackendData*)ctx->backend_data;
     if (!data) return 0;
@@ -408,6 +443,16 @@ static int sdl2_dump_due(long interval, long frame) {
 
 long g_dbg_frame_counter;
 static long s_dump_interval_cached = -1;
+/* the next tick frame will be dumped (HFR grid pacer: draw it at alpha 1) */
+int platform_dump_due_next(void) {
+    long iv = s_dump_interval_cached;
+    if (iv < 0) {
+        extern long g_dump_interval_arg;
+        const char *e = getenv("SMB2_DUMP_INTERVAL");
+        iv = g_dump_interval_arg > 0 ? g_dump_interval_arg : (e ? atol(e) : 0);
+    }
+    return sdl2_dump_due(iv > 0 ? iv : 0, g_dbg_frame_counter + 1);
+}
 
 /* HFR in-between frame (docs/hfr.md): present without advancing the tick
  * frame counter (--exit-frame, dump numbering and traces stay per tick).
@@ -435,8 +480,11 @@ void platform_present_subframe(int j) {
         }
     }
     {
+        extern int g_pace_j;
         PERF_BEGIN(t0);
+        g_pace_j = j;
         render_present();
+        g_pace_j = 0;
         PERF_END(t0, PERF_T_SWAP);
         perf_frame_end();
     }
@@ -492,7 +540,9 @@ static void sdl2_swap_buffers(PlatformContext* ctx) {
         else if (g_mtx_trace > 0)
             fprintf(stderr, "[trace] ---- swap (frame %ld) ----\n", s_frame);
         {
+            extern double g_pace_content;
             PERF_BEGIN(t0);
+            g_pace_content = (double)s_frame;
             render_present();
             PERF_END(t0, PERF_T_SWAP);
             perf_frame_end();

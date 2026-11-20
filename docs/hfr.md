@@ -162,7 +162,72 @@ batch never spans two objects; with HFR off the hooks return at once.
 Minigame-private objects (boat, race, baseball ...) need no tags: the
 generic matching (nearest position + mesh identity) pairs them.
 
-## 4. Frame pacing (video_shim.c `hfr_subframes`)
+## 4. Frame pacing (video_shim.c `hfr_grid`, `hfr_subframes`)
+
+### Display-grid pacer (V-Sync on, D3D12, display confirms the plan)
+
+Used when V-Sync is on and the backend reports where each present went
+(D3D12 swap chain frame statistics), otherwise - GL, V-Sync off, VRR,
+`SMB2_PACE=timer` - the timer pacer below runs.
+
+* Frames go out one every q refreshes, each showing the content of the
+  moment it is on screen: `content(V) = N + (V - S_N - lat) / T` (tick N's
+  logic starts at S_N, T = 16.67 ms), so the scene advances by the same
+  amount per shown frame whatever the presents' CPU timing.  (The timer
+  pacer takes the phase at the GPU start and the display rounds the frames
+  to refreshes: on a 240 Hz display the cadence mixes 1, 2 and 3 refreshes,
+  i.e. 60 Hz judder on scrolling surfaces.)
+* q = refresh / requested rate, and only while that rate fits: CPU (logic +
+  the tick's replays), GPU (its frames) and the flip queue (a tick's last
+  frame is shown ~lat after the tick starts, its first is drawn after the
+  logic; DXGI queues 3 presents).  Otherwise - e.g. `Display` / 240 on a
+  240 Hz display, where one frame per refresh never fits 3 queued presents -
+  the timer pacer shows as many frames as fit, as before.  Back on the grid
+  after 2 s of headroom; 3 misses count as not fitting and double that wait
+  (up to 32 s).  In practice the grid runs at 2 refreshes per frame (120 on
+  240 Hz, 72 on 144 Hz) or at the full rate of a ~120 Hz display; full rate
+  at 240 Hz would need a deeper frame queue (a waitable swap chain with a
+  higher maximum frame latency).
+* q = 1 or 2 only: measured on the 240 Hz G8 (exclusive fullscreen), frames
+  presented with sync interval 2 keep exactly 2 refreshes apart, with 3-4
+  they landed 2 refreshes early.  An explicit rate that is not refresh or
+  refresh / 2 (144 on 240 Hz) uses the timer pacer.
+* Every frame is presented with the sync interval that puts it q refreshes
+  after the previous one, so a tick's frames are drawn right after its
+  logic and DXGI queues them (6 back buffers while the pacer runs; at most
+  3 presents queued, a fourth would block the game thread: that slot is
+  skipped).
+* `lat` (content latency) is the least that lets every frame be drawn after
+  the logic of the tick it interpolates to: W = logic (p90 over 2 s, from
+  the tick's real start) + replay + GPU + margin; the next tick's first
+  frame is the first slot after S_N+1 + W, so the slot before belongs to
+  this tick and lat >= that slot - S_N.  Raised at once, lowered by 0.3 %
+  of a tick per tick.  The grid's phase is chosen at a start to need the
+  least lat, and moved by one refresh when another phase needs >= 2 ms less
+  for 2 s.  A hitch (a tick over a whole tick late, loading) restarts the
+  chain instead of raising lat.
+* A slot that cannot be ready in time is skipped (the previous frame stays
+  q refreshes longer).  The frame statistics say at which refresh each
+  present was shown; a frame that landed elsewhere moves the predicted chain
+  (margin +0.25 ms, up to 1.5 ms).  When more than 10 % of 120 checked
+  frames land elsewhere (a composed window shows the newest frame at every
+  refresh), the timer pacer takes over for 30 s, doubling per failure.
+* The tick-start present is skipped (the tick's frames are on their way),
+  except on frame-dump ticks, which present the alpha-1 frame as before.
+* Display timing: the swap chain's frame statistics over the last ~2 s;
+  SyncQPCTime is read by the scheduler near the refresh, sometimes 0.5-1.5
+  ms late and never early, so the period is the median of consecutive
+  ratios and the vblank the earliest stamp relative to that grid (a
+  two-point average from the first sample gave 220-230 Hz on the 240 Hz G8,
+  and 120 fps was declined as an uneven rate).  `SMB2_PACE_DBG=1` prints why
+  the pacer declined a tick, once a second.
+* GPU times: D3D12 timestamps; a list executed without its end timestamp
+  (swap chain resize) is not counted, nor samples over 100 ms.
+
+### Timer pacer (V-Sync off, VRR, GL, no display feedback)
+
+### Timer pacer (V-Sync off, VRR, no display timing)
+
 
 * The 60 Hz deadline is unchanged (tick frame presented at `next_ns`).
 * In-between phases on the target's grid, `tick0 + j/fps` (exact alpha j/k
@@ -246,6 +311,29 @@ turns, so it is not used.
   that tick (`SMB2_HFR_DEBUG_FULL=1`: matrices and vertices of small draws).
 * modes.sh `hfr_roll` (Challenge 1-1 at full tilt: fast ball spin, goal
   party ball, replay) and `hfr_fall` (fall-out, respawn cut).
+* **Frame pacing measurements** (section 4): `SMB2_PACE_LOG=1` keeps every
+  present (content time, present id, sync interval, planned refresh), every
+  tick (start, end of logic), every frame's GPU start / end (D3D12
+  timestamps on the CPU clock) and, on D3D12, every change of the swap
+  chain's frame statistics (which present reached the screen at which
+  refresh) in memory and prints them at exit.  `tools/hfr/pacestat.py
+  log.txt [first_tick last_tick]` turns that into: content advance per
+  refresh between shown frames and its sd (0 = even motion), cadence
+  histogram, presents per tick, present -> display, GPU end -> display, tick
+  start -> display (input latency).  `SMB2_PACE_DBG=1` adds a `[grid]` line
+  per second (refresh, q, latency, its requirement, miss / late counts).
+* GL has no frame statistics: `tools/hfr/dispcap/dispcap.c` (build with
+  llvm-mingw: `-ld3d11 -ldxgi -luser32`) reads the desktop through Desktop
+  Duplication while the game runs with `SMB2_PACE_MARK=1` (present id as an
+  18-block code in the top-left corner); `pacestat.py log.txt a b --dc
+  dc.txt` then measures from the display side.  Only that 144x8 strip is
+  read.  Duplication keeps the compositor in the path, so use it for
+  windowed runs.
+* `--display windowed|borderless|fullscreen` picks the display mode of an
+  automated run (scripted runs are windowed otherwise).
+* Measurements need the display awake and the window on screen: a sleeping
+  monitor reports no vertical blanks (all-zero frame statistics) and the
+  pacer then falls back to the timer pacer.
 
 ## 8. Performance and latency
 
@@ -271,6 +359,42 @@ first frame that shows a new tick (the first in-between frame) appears
 4.5-5.1 ms after the tick start at 240 fps and 8.4-8.8 ms at 120 fps, vs
 16.7 ms at 60 fps (`first` in the `[hfr]` line).  In heavy windows without
 in-between frames it is 16.7 ms, like 60 fps.
+
+### Frame pacing measurements (2026-11-19, owner's PC)
+
+RTX 3080, Samsung Odyssey G8 (239.997 Hz, fixed refresh), 3840x2160, MSAA
+8x, V-Sync on, x64 build, `SMB2_PACE_LOG`; 2-5 (launcher stage 11, lava
+falls, ticks 2200-2690) unless noted.  speed sd = sd of the content
+advance per refresh between shown frames (ideal 0.25 tick, 0 = even);
+latency = tick start -> that tick's state on screen (mean).
+
+| D3D12 exclusive fullscreen | pacer | shown fps | refreshes per frame | speed sd | latency ms |
+|---|---|---|---|---|---|
+| Display | timer (before) | 168.8 | 1: 802, 2: 574, 3: 4 | 0.0289 | 23.1 |
+| 120 | timer (before) | 120.0 | 1: 7, 2: 967, 3: 7 | 0.0202 | 21.5 |
+| 120 | grid | 120.0 | 2: 981 | **0.0000** | 25.7 |
+| 144 | timer (both) | 120.0 | mostly 2 | 0.0260 | 22.3 |
+| Race, Display | timer (before) | 209.6 | 1: 1466, 2: 247 | 0.0954 | 23.3 |
+| Race, 120 (*) | grid | 119.1 | 2: 966, 3: 1, 4: 7 | **0.0245** | 25.3 |
+
+Every grid frame of the 120 run reached the screen on its planned refresh
+(982 of 982), present -> display 11 ms (the tick's frames wait queued).
+(*) measured with a build in which `Display` chose 120 by itself (not
+kept: `Display` asks for the full rate).  Full rate (240) does not fit this
+scene (GPU 4.4 ms x 4 > 16.7 ms) and, at 240 Hz, never fits the flip queue
+(section 4): `Display` / 240 runs the timer pacer, exactly as before
+(~169 frames/s, speed sd 0.029); 120 gives even frames (sd 0.000) for
+~2-4 ms more latency.
+
+| windowed (composed) | pacer | shown fps | speed sd | latency ms |
+|---|---|---|---|---|
+| D3D12 Display | timer | 165.4 | 0.0301 | 22.0 |
+| D3D12 Display | grid detects the composition, timer | - | - | - |
+| GL Display (dispcap) | timer | 120.7 (464 of 1452 presents never shown) | 0.1105 | 19.7 |
+
+GL has no per-present feedback: the grid pacer is not used (an open-loop
+attempt over the compositor's vblank timing measured 16 frames/s matched,
+q = 4 from an inflated present -> GPU-done time).
 
 ## 9. 60 fps
 
@@ -317,5 +441,7 @@ replays run no game code and never touch gx_core state the game reads
   system some ticks get no in-between frame at all.  Scrolling surfaces (the
   lava falls) then judder at 60 Hz.  The display time is not predictable
   from the vblank grid alone (DXGI frame statistics show 2-3 refreshes of
-  queue latency that differ between frames); fixing it needs per-present
-  display feedback or a waitable, latency-1 swap chain.
+  queue latency that differ between frames).  The display-grid pacer
+  (section 4) addresses this with per-present display feedback; a waitable
+  latency-1 swap chain does not fit a single game thread that must queue a
+  tick's frames ahead (the tick's logic runs between them).

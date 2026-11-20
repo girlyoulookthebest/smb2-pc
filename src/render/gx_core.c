@@ -1070,7 +1070,37 @@ void render_end_frame(void) {
 /* A batch still pending at present time (GXEnd is a no-op, so the frame's
  * last batch waits for the next state change) is not flushed here; see
  * docs/d3d12.md, Known differences. */
+/* SMB2_PACE_LOG (pace_log.c): what the present shows - set by the
+ * callers (tick frame: content = tick number, in-between j: tick - 1 + alpha) */
+double g_pace_content; int g_pace_j;
+int g_pace_si = 1; double g_pace_plan; unsigned g_pace_flags;
+/* HFR display-grid pacer: the tick's frames were presented by the pacer,
+ * the tick-start present (gx_start_new_frame) has nothing to show */
+int g_pace_skip_present;
 void render_present(void) {
+    extern int pace_log_on(void);
+    if (g_pace_skip_present) {
+        g_pace_skip_present = 0;
+        return;
+    }
+    if (g_core && pace_log_on()) {
+        extern void pace_log_present(long tick, int j, double c, uint32_t pid, uint64_t t0, uint64_t t1,
+                                     int si, double plan_ns, unsigned flags);
+        extern unsigned long long platform_get_time_ns(void);
+        extern long g_dbg_frame_counter;
+        uint64_t t0 = platform_get_time_ns(), t1;
+        g_gpu->present();
+        t1 = platform_get_time_ns();
+        if (hfr_active()) {
+            extern double g_hfr_present_est_ns;
+            g_hfr_present_est_ns = g_hfr_present_est_ns * 0.9 + (double)(t1 - t0) * 0.1;
+        }
+        pace_log_present(g_dbg_frame_counter, g_pace_j, g_pace_content,
+                         g_gpu->present_id ? g_gpu->present_id() : 0, t0, t1, g_pace_si, g_pace_plan, g_pace_flags);
+        g_pace_si = 1; g_pace_plan = 0.0; g_pace_flags = 0;
+        hfr_note_present();
+        return;
+    }
     if (g_core) {
         if (hfr_active()) {
             /* HFR pacer: how long a present call takes (every present) */
@@ -2141,8 +2171,11 @@ static void gxfx_defaults(void) {
         s_gx.ord[i][0] = i < 8 ? i : 0;
         s_gx.ord[i][1] = i < 8 ? i : -1;
         s_gx.ord[i][2] = 1;
-        s_gx.ksel[i] = 0x0C;   /* GX_TEV_KCSEL_K0 */
-        s_gx.kasel[i] = 0x1C;  /* GX_TEV_KASEL_K0_A */
+        /* GXInit's: no game code resets them, so a stage whose K
+         * selections were never set reads these (bg_bns fn_1_7AD90 takes
+         * its additive ball-lightmap alpha from KONST: KASEL_1 = 1.0) */
+        s_gx.ksel[i] = 0x06;   /* GX_TEV_KCSEL_1_4 */
+        s_gx.kasel[i] = 0x00;  /* GX_TEV_KASEL_1 */
         s_gx.swap[i][0] = s_gx.swap[i][1] = 0;
     }
     /* swap tables as the game leaves them: its GX-cache reset

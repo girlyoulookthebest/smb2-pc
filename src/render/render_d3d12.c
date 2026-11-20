@@ -494,7 +494,8 @@ static pD3DCompile p_D3DCompile;
 
 #define NFRAMES 2
 #define NSH 6                              /* compiled shader entry points */
-#define NBACK 3
+#define NBACK 6                            /* back buffers at most (D.nback in use) */
+#define NBACK_DEFAULT 3
 #define SEG_SIZE ((size_t)32 << 20)        /* upload ring bytes per frame slot */
 #define SRV_SEG 65536                      /* shader-visible SRVs per frame slot */
 #define SMP_HEAP 2048                      /* shader-visible samplers */
@@ -541,6 +542,8 @@ static struct {
     ID3D12DescriptorHeap* dsv_heap;
     UINT rtv_inc, srv_inc, smp_inc;
     ID3D12Resource* bb[NBACK];
+    int nback;                        /* back buffers in use (present_queue) */
+    int si;                           /* sync interval of the next presents (present_interval) */
     ID3D12Resource* rt;               /* main colour target (MSAA = msaa) */
     ID3D12Resource* ds;
     ID3D12Resource* rt_res;           /* resolved copy (msaa > 1) */
@@ -612,6 +615,9 @@ static struct {
     long frames;
     /* GPU time per presented frame (timestamps at slot begin / present) */
     ID3D12QueryHeap* qheap; ID3D12Resource* qread; UINT64 qfreq; int q_ok;
+    unsigned q_pid[NFRAMES];          /* SMB2_PACE_LOG: present id of the slot's frame */
+    UINT64 cal_gpu, cal_cpu;          /* GetClockCalibration: GPU timestamp <-> QPC */
+    unsigned long long gpu_end_ns;    /* latest finished frame's GPU end (platform clock) */
     int q_valid[NFRAMES]; double gpu_ms_acc; long gpu_ms_n;
 } D;
 
@@ -1246,7 +1252,7 @@ static int create_targets(void) {
     D3D12_CLEAR_VALUE cv;
     D3D12_DEPTH_STENCIL_VIEW_DESC dv;
     int i;
-    for (i = 0; i < NBACK; i++) {
+    for (i = 0; i < D.nback; i++) {
         if (FAILED(IDXGISwapChain3_GetBuffer(D.swap, (UINT)i, &IID_ID3D12Resource, (void**)&D.bb[i])))
             return 0;
         ID3D12Device_CreateRenderTargetView(D.dev, D.bb[i], NULL, heap_cpu(D.rtv_heap, (UINT)i, D.rtv_inc));
@@ -2201,7 +2207,31 @@ static void begin_slot(void) {
         rr.Begin = (SIZE_T)D.slot * 16; rr.End = rr.Begin + 16;
         if (SUCCEEDED(ID3D12Resource_Map(D.qread, 0, &rr, (void**)&t)) && t) {
             UINT64 a = t[D.slot * 2], b = t[D.slot * 2 + 1];
-            if (b > a && D.qfreq) { D.gpu_ms_acc += (double)(b - a) * 1000.0 / (double)D.qfreq; D.gpu_ms_n++; }
+            /* (a list executed without its end timestamp leaves a stale
+             * one: only plausible frame times count) */
+            if (b > a && D.qfreq && (double)(b - a) < 0.1 * (double)D.qfreq) {
+                D.gpu_ms_acc += (double)(b - a) * 1000.0 / (double)D.qfreq; D.gpu_ms_n++;
+            }
+            if (b > a && D.qfreq && (double)(b - a) < 0.1 * (double)D.qfreq) {
+                /* GPU start / end on the platform clock (calibrated once
+                 * per second: GPU timestamp and QPC drift apart slowly) */
+                extern unsigned long long platform_counter_time_ns(unsigned long long counter);
+                extern void pace_log_gpu(unsigned pid, unsigned long long t0, unsigned long long t1);
+                extern int pace_log_on(void);
+                static unsigned cal_n;
+                LARGE_INTEGER qf;
+                if ((cal_n++ % 240) == 0 || !D.cal_cpu)
+                    ID3D12CommandQueue_GetClockCalibration(D.queue, &D.cal_gpu, &D.cal_cpu);
+                QueryPerformanceFrequency(&qf);
+                if (D.cal_cpu) {
+                    double qa = (double)D.cal_cpu + ((double)a - (double)D.cal_gpu) * (double)qf.QuadPart / (double)D.qfreq;
+                    double qb = (double)D.cal_cpu + ((double)b - (double)D.cal_gpu) * (double)qf.QuadPart / (double)D.qfreq;
+                    unsigned long long ta = qa > 0 ? platform_counter_time_ns((unsigned long long)qa) : 0;
+                    unsigned long long tb = qb > 0 ? platform_counter_time_ns((unsigned long long)qb) : 0;
+                    if (tb > D.gpu_end_ns) D.gpu_end_ns = tb;
+                    if (pace_log_on()) pace_log_gpu(D.q_pid[D.slot], ta, tb);
+                }
+            }
             rr.End = rr.Begin;
             ID3D12Resource_Unmap(D.qread, 0, &rr);
         }
@@ -2221,6 +2251,74 @@ static double dx_gpu_frame_ms(void) {
     double r = D.gpu_ms_n ? D.gpu_ms_acc / (double)D.gpu_ms_n : 0.0;
     D.gpu_ms_acc = 0.0; D.gpu_ms_n = 0;
     return r;
+}
+
+/* SMB2_PACE_LOG: a thread polls the swap chain's frame statistics and
+ * keeps every change (which present reached the screen at which refresh,
+ * the latest vblank's time), written at exit by pace_log.c */
+typedef struct { uint64_t t, sync_ns; UINT pc, prc, src; signed char mode; } DxDispRec;
+static DxDispRec* s_dd; static volatile LONG s_dd_n; static LONG s_dd_cap;
+static DWORD WINAPI dx_disp_thread(LPVOID u) {
+    extern unsigned long long platform_get_time_ns(void);
+    extern unsigned long long platform_counter_time_ns(unsigned long long counter);
+    UINT last_pc = 0, last_src = 0;
+    IDXGISwapChainMedia* media = NULL;
+    uint64_t last_media = 0;
+    int mode = -1;
+    (void)u;
+    for (;;) {
+        DXGI_FRAME_STATISTICS st;
+        uint64_t now = platform_get_time_ns();
+        if (!media && D.swap && mode == -1) {
+            HRESULT h = IDXGISwapChain3_QueryInterface(D.swap, &IID_IDXGISwapChainMedia, (void**)&media);
+            if (FAILED(h)) { mode = -2; printf("[pacelog] no IDXGISwapChainMedia (0x%08lx)\n", (unsigned long)h); }
+        }
+        if (media && now - last_media > 250000000ULL) {
+            DXGI_FRAME_STATISTICS_MEDIA sm;
+            HRESULT h;
+            last_media = now;
+            h = IDXGISwapChainMedia_GetFrameStatisticsMedia(media, &sm);
+            if (SUCCEEDED(h)) mode = (int)sm.CompositionMode;
+            else mode = -3;
+        }
+        if (D.swap && SUCCEEDED(IDXGISwapChain3_GetFrameStatistics(D.swap, &st)) &&
+            (st.PresentCount != last_pc || st.SyncRefreshCount != last_src)) {
+            LONG i = s_dd_n;
+            last_pc = st.PresentCount; last_src = st.SyncRefreshCount;
+            if (i < s_dd_cap) {
+                s_dd[i].t = now;
+                s_dd[i].sync_ns = platform_counter_time_ns((unsigned long long)st.SyncQPCTime.QuadPart);
+                s_dd[i].pc = st.PresentCount; s_dd[i].prc = st.PresentRefreshCount;
+                s_dd[i].src = st.SyncRefreshCount; s_dd[i].mode = (signed char)mode;
+                InterlockedExchange(&s_dd_n, i + 1);
+            }
+        }
+        Sleep(1);   /* flips are >= 4 ms apart; SyncQPCTime is exact anyway */
+    }
+    return 0;
+}
+static void dx_disp_dump(void) {
+    LONG i, n = s_dd_n;
+    for (i = 0; i < n; i++)
+        printf("[pd] %llu %u %u %u %llu %d\n", (unsigned long long)s_dd[i].t, s_dd[i].pc, s_dd[i].prc,
+               s_dd[i].src, (unsigned long long)s_dd[i].sync_ns, s_dd[i].mode);
+}
+static void dx_disp_log_start(void) {
+    extern int pace_log_on(void);
+    extern void (*g_pace_disp_dump)(void);
+    static int started;
+    if (started || !pace_log_on()) return;
+    started = 1;
+    s_dd_cap = 1 << 20;
+    s_dd = (DxDispRec*)calloc((size_t)s_dd_cap, sizeof *s_dd);
+    if (!s_dd) return;
+    g_pace_disp_dump = dx_disp_dump;
+    CreateThread(NULL, 0, dx_disp_thread, NULL, 0, NULL);
+}
+static unsigned dx_present_id(void) {
+    UINT n = 0;
+    if (!D.ok || !D.swap || FAILED(IDXGISwapChain3_GetLastPresentCount(D.swap, &n))) return 0;
+    return n;
 }
 
 static void dx_present(void) {
@@ -2243,6 +2341,26 @@ static void dx_present(void) {
         barrier(bb, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_PRESENT);
     }
     rt_to(D3D12_RESOURCE_STATE_RENDER_TARGET);
+    {   /* SMB2_PACE_MARK=1: the present id in the top-left corner for
+         * tools/hfr/dispcap (white, black, 16 bits MSB first) */
+        static int mark = -1;
+        if (mark < 0) mark = getenv("SMB2_PACE_MARK") && atoi(getenv("SMB2_PACE_MARK"));
+        if (mark) {
+            static const FLOAT wh[4] = { 1, 1, 1, 1 }, bk[4] = { 0, 0, 0, 1 };
+            D3D12_RECT rw[18], rb[18];
+            int nw = 0, nb = 0, b;
+            unsigned id = dx_present_id() + 1;
+            for (b = 0; b < 18; b++) {
+                int one = b == 0 ? 1 : b == 1 ? 0 : (int)((id >> (15 - (b - 2))) & 1);
+                D3D12_RECT r = { 8 * b, 0, 8 * b + 8, 8 };
+                if (one) rw[nw++] = r; else rb[nb++] = r;
+            }
+            barrier(bb, D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_RENDER_TARGET);
+            ID3D12GraphicsCommandList_ClearRenderTargetView(D.cl, heap_cpu(D.rtv_heap, idx, D.rtv_inc), wh, (UINT)nw, rw);
+            ID3D12GraphicsCommandList_ClearRenderTargetView(D.cl, heap_cpu(D.rtv_heap, idx, D.rtv_inc), bk, (UINT)nb, rb);
+            barrier(bb, D3D12_RESOURCE_STATE_RENDER_TARGET, D3D12_RESOURCE_STATE_PRESENT);
+        }
+    }
     if (D.q_ok) {
         ID3D12GraphicsCommandList_EndQuery(D.cl, D.qheap, D3D12_QUERY_TYPE_TIMESTAMP, (UINT)D.slot * 2 + 1);
         ID3D12GraphicsCommandList_ResolveQueryData(D.cl, D.qheap, D3D12_QUERY_TYPE_TIMESTAMP,
@@ -2257,9 +2375,11 @@ static void dx_present(void) {
     }
     lists[0] = (ID3D12CommandList*)D.cl;
     ID3D12CommandQueue_ExecuteCommandLists(D.queue, 1, lists);
-    hr = IDXGISwapChain3_Present(D.swap, D.vsync ? 1 : 0,
+    dx_disp_log_start();
+    hr = IDXGISwapChain3_Present(D.swap, D.vsync ? (UINT)D.si : 0,
                                  (!D.vsync && D.tearing) ? DXGI_PRESENT_ALLOW_TEARING : 0);
     dx_check_removed(hr, "Present");
+    D.q_pid[D.slot] = dx_present_id();
     D.fence_value++;
     ID3D12CommandQueue_Signal(D.queue, D.fence, D.fence_value);
     D.frame_fence[D.slot] = D.fence_value;
@@ -2281,6 +2401,7 @@ static void dx_resize(int width, int height) {
     if (!D.ok || width <= 0 || height <= 0) return;
     if (width == D.width && height == D.height) return;
     /* finish the open list, drain the GPU, rebuild the size-dependent targets */
+    D.q_valid[D.slot] = 0;   /* this list ends without its end timestamp */
     ID3D12GraphicsCommandList_Close(D.cl);
     lists[0] = (ID3D12CommandList*)D.cl;
     ID3D12CommandQueue_ExecuteCommandLists(D.queue, 1, lists);
@@ -2289,7 +2410,7 @@ static void dx_resize(int width, int height) {
     release_targets();
     D.width = width;
     D.height = height;
-    hr = IDXGISwapChain3_ResizeBuffers(D.swap, NBACK, (UINT)width, (UINT)height,
+    hr = IDXGISwapChain3_ResizeBuffers(D.swap, (UINT)D.nback, (UINT)width, (UINT)height,
                                        DXGI_FORMAT_R8G8B8A8_UNORM,
                                        D.tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
     dx_check_removed(hr, "ResizeBuffers");
@@ -2307,6 +2428,114 @@ static void dx_resize(int width, int height) {
 }
 
 static void dx_set_vsync(int on) { D.vsync = on != 0; }
+
+/* ---- frame pacing (docs/hfr.md section 4) ---- */
+static void dx_present_interval(int si) { D.si = si < 1 ? 1 : si > 4 ? 4 : si; }
+
+/* The HFR display-grid pacer queues a tick's frames ahead (each with the
+ * sync interval that puts it on its refresh): more back buffers, so a
+ * frame never waits on the GPU for one that is still queued. */
+static void dx_present_queue(int n) {
+    ID3D12CommandList* lists[1];
+    HRESULT hr;
+    int i, want = n <= 0 ? NBACK_DEFAULT : n + 2;
+    if (want > NBACK) want = NBACK;
+    if (want < NBACK_DEFAULT) want = NBACK_DEFAULT;
+    if (!D.ok || want == D.nback) return;
+    D.q_valid[D.slot] = 0;   /* this list ends without its end timestamp */
+    ID3D12GraphicsCommandList_Close(D.cl);
+    lists[0] = (ID3D12CommandList*)D.cl;
+    ID3D12CommandQueue_ExecuteCommandLists(D.queue, 1, lists);
+    wait_idle();
+    process_deferred();
+    for (i = 0; i < NBACK; i++)
+        if (D.bb[i]) { ID3D12Resource_Release(D.bb[i]); D.bb[i] = NULL; }
+    hr = IDXGISwapChain3_ResizeBuffers(D.swap, (UINT)want, (UINT)D.width, (UINT)D.height,
+                                       DXGI_FORMAT_R8G8B8A8_UNORM,
+                                       D.tearing ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+    dx_check_removed(hr, "ResizeBuffers");
+    if (SUCCEEDED(hr)) D.nback = want;
+    for (i = 0; i < D.nback; i++) {
+        if (FAILED(IDXGISwapChain3_GetBuffer(D.swap, (UINT)i, &IID_ID3D12Resource, (void**)&D.bb[i]))) {
+            fprintf(stderr, "[d3d12] back buffers lost (0x%08lx)\n", (unsigned long)hr);
+            fflush(NULL);
+            exit(3);
+        }
+        ID3D12Device_CreateRenderTargetView(D.dev, D.bb[i], NULL, heap_cpu(D.rtv_heap, (UINT)i, D.rtv_inc));
+    }
+    fprintf(stderr, "[d3d12] %d back buffers\n", D.nback);
+    ID3D12CommandAllocator_Reset(D.alloc[D.slot]);
+    ID3D12GraphicsCommandList_Reset(D.cl, D.alloc[D.slot], NULL);
+    D.seg_off = 0;
+    D.srv_gpu_off = 0;
+    apply_frame_state();
+}
+
+/* the swap chain's frame statistics: the latest vblank, the refresh period
+ * and the latest present on screen.  SyncQPCTime is when the scheduler read
+ * the clock near refresh SyncRefreshCount: sometimes late (0.5-1.5 ms),
+ * never early, so a two-point average is biased.  Over the last ~2 s of
+ * samples: the period is the median of the consecutive ratios, the vblank
+ * the earliest stamp relative to that grid.  Fails (0) until 20 ratios
+ * exist, and after a gap or a mode change (DISJOINT, the count going back)
+ * it starts over. */
+#define DT_RING 256
+static int dx_display_timing(GxDisplayTiming* t) {
+    extern unsigned long long platform_counter_time_ns(unsigned long long counter);
+    static unsigned long long rt[DT_RING]; static UINT rc[DT_RING]; static int rn, rh;
+    DXGI_FRAME_STATISTICS st;
+    unsigned long long tv, vb;
+    double rat[DT_RING], P, x;
+    HRESULT hr;
+    int i, j, k, n;
+    if (!D.ok || !D.swap || !D.vsync) return 0;
+    hr = IDXGISwapChain3_GetFrameStatistics(D.swap, &st);
+    if (getenv("SMB2_PACE_DBG")) {
+        static int dn;
+        if (dn++ % 240 == 0) printf("[dxstat] hr 0x%08lx pc %u prc %u src %u qpc %lld\n", (unsigned long)hr,
+                                    st.PresentCount, st.PresentRefreshCount, st.SyncRefreshCount, (long long)st.SyncQPCTime.QuadPart);
+    }
+    if (FAILED(hr) || st.SyncQPCTime.QuadPart <= 0) { rn = 0; return 0; }
+    tv = platform_counter_time_ns((unsigned long long)st.SyncQPCTime.QuadPart);
+    if (!tv) return 0;
+    if (rn) {
+        int last = (rh + DT_RING - 1) % DT_RING;
+        if (st.SyncRefreshCount < rc[last] || tv < rt[last] ||
+            tv - rt[last] > 1000000000ULL) rn = 0;            /* mode change / gap */
+        else if (st.SyncRefreshCount == rc[last]) goto have;   /* nothing new */
+    }
+    rt[rh] = tv; rc[rh] = st.SyncRefreshCount;
+    rh = (rh + 1) % DT_RING;
+    if (rn < DT_RING) rn++;
+    /* keep ~2 s */
+    while (rn > 2 && tv - rt[(rh + DT_RING - rn) % DT_RING] > 2000000000ULL) rn--;
+have:
+    for (i = 1, n = 0; i < rn; i++) {
+        int a0 = (rh + DT_RING - rn + i - 1) % DT_RING, a1 = (a0 + 1) % DT_RING;
+        UINT dc = rc[a1] - rc[a0];
+        if (dc >= 1 && dc <= 8) rat[n++] = (double)(rt[a1] - rt[a0]) / (double)dc;
+    }
+    if (n < 20) return 0;
+    for (i = 1; i < n; i++) {   /* insertion sort, n < 256 */
+        x = rat[i];
+        for (j = i - 1; j >= 0 && rat[j] > x; j--) rat[j + 1] = rat[j];
+        rat[j + 1] = x;
+    }
+    P = rat[n / 2];
+    k = (rh + DT_RING - 1) % DT_RING;
+    vb = rt[k];
+    for (i = 0; i < rn; i++) {
+        int a = (rh + DT_RING - rn + i) % DT_RING;
+        double proj = (double)rt[a] + (double)(rc[k] - rc[a]) * P;
+        if (proj < (double)vb) vb = (unsigned long long)proj;
+    }
+    t->vblank_ns = vb;
+    t->vblank_count = rc[k];
+    t->period_ns = P;
+    t->shown_id = st.PresentCount;
+    t->shown_count = st.PresentRefreshCount;
+    return 1;
+}
 
 static void dx_begin_frame(void) {}
 
@@ -2548,7 +2777,9 @@ static bool dx_init(int width, int height, bool vsync, int msaa) {
     sd.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
     sd.SampleDesc.Count = 1;
     sd.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
-    sd.BufferCount = NBACK;
+    D.nback = NBACK_DEFAULT;
+    D.si = 1;
+    sd.BufferCount = (UINT)D.nback;
     sd.Scaling = DXGI_SCALING_STRETCH;
     sd.SwapEffect = DXGI_SWAP_EFFECT_FLIP_DISCARD;
     sd.AlphaMode = DXGI_ALPHA_MODE_UNSPECIFIED;
@@ -2672,6 +2903,10 @@ const GxGpu gx_gpu_d3d12 = {
     .copy_tex_result = dx_copy_tex_result,
     .gpu_mem = dx_gpu_mem,
     .gpu_frame_ms = dx_gpu_frame_ms,
+    .present_id = dx_present_id,
+    .display_timing = dx_display_timing,
+    .present_interval = dx_present_interval,
+    .present_queue = dx_present_queue,
     .read_frame = dx_read_frame,
     .capture = dx_capture,
     .restore = dx_restore,

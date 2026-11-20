@@ -30,6 +30,7 @@ static bool g_running = true;
 static int g_window_width = 1280;
 static int g_window_height = 720;
 static bool g_fullscreen = false;
+static int g_display_arg = -1;   /* --display: 0 windowed, 1 borderless, 2 fullscreen */
 static bool g_vsync = true;
 static int g_msaa = 4;
 static const char* g_fps_arg = NULL;  /* --fps 60|120|...|uncapped|display */
@@ -144,6 +145,13 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "--windowed") == 0) {
             g_fullscreen = false;
             g_cli_overrides |= PCS_OVR_MODE;
+        } else if (strcmp(argv[i], "--display") == 0 && i + 1 < argc) {
+            /* windowed | borderless | fullscreen (exclusive), e.g. for
+             * frame pacing measurements in automated runs */
+            const char* m = argv[++i];
+            g_display_arg = !strcmp(m, "fullscreen") ? 2 : !strcmp(m, "borderless") ? 1 : 0;
+            g_fullscreen = g_display_arg != 0;
+            g_cli_overrides |= PCS_OVR_MODE;
         } else if (strcmp(argv[i], "--no-vsync") == 0) {
             g_vsync = false;
             g_cli_overrides |= PCS_OVR_VSYNC;
@@ -195,6 +203,7 @@ int main(int argc, char* argv[]) {
             printf("  --height <h>      Window height (default: 720)\n");
             printf("  --fullscreen      Start in (borderless) fullscreen\n");
             printf("  --windowed        Start in windowed mode\n");
+            printf("  --display <m>     windowed, borderless or fullscreen (exclusive)\n");
             printf("  --no-vsync        Disable VSync\n");
             printf("  --msaa <n>        MSAA samples (default: 4)\n");
             printf("  --fps <n>         Rendered frames per second: 60 (default, no\n"
@@ -259,7 +268,7 @@ int main(int argc, char* argv[]) {
         ovr.width = g_window_width;
         ovr.height = g_window_height;
         if (g_cli_overrides & PCS_OVR_MODE)
-            ovr.display_mode = g_fullscreen ? PCS_BORDERLESS : PCS_WINDOWED;
+            ovr.display_mode = g_display_arg == 2 ? PCS_FULLSCREEN : g_fullscreen ? PCS_BORDERLESS : PCS_WINDOWED;
         ovr.vsync = g_vsync;
         ovr.msaa = g_msaa;
         if (g_fps_arg) ovr.fps = pcs_parse_fps(g_fps_arg);

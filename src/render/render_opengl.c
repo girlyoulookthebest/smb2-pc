@@ -1047,12 +1047,157 @@ static void glb_resize(int width, int height) {
     g_backend->height = height;
 }
 
+/* ---- frame pacing (docs/hfr.md section 4) ----
+ * GL has no per-present display feedback: a swap counter for the pacer's
+ * bookkeeping, the swap interval per present, and how long after the swap
+ * call the GPU finishes the frame (GL_TIMESTAMP queries written just
+ * before the swap, read two frames later, on the CPU clock through a
+ * calibration of GL_TIMESTAMP against platform_get_time_ns). */
+static unsigned s_gl_swaps;
+typedef void (APIENTRY *PFN_pcBindFramebufferMark)(GLenum, GLuint);
+static void APIENTRY bindfb_none(GLenum t, GLuint f) { (void)t; (void)f; }
+static void p_bindfb_mark(GLenum t, GLuint f) {
+    static PFN_pcBindFramebufferMark fn;
+    if (!fn) {
+        fn = (PFN_pcBindFramebufferMark)SDL_GL_GetProcAddress("glBindFramebuffer");
+        if (!fn) fn = bindfb_none;
+    }
+    fn(t, f);
+}
+static int s_gl_vsync = 1, s_gl_si = 1;
+typedef void (APIENTRY *PFN_pcQueryCounter)(GLuint, GLenum);
+typedef void (APIENTRY *PFN_pcGetQueryObjectui64v)(GLuint, GLenum, GLuint64*);
+typedef void (APIENTRY *PFN_pcGetInteger64v)(GLenum, GLint64*);
+typedef void (APIENTRY *PFN_pcGenQueries)(GLsizei, GLuint*);
+static PFN_pcQueryCounter p_qc; static PFN_pcGetQueryObjectui64v p_qget; static PFN_pcGetInteger64v p_gi64;
+static GLuint s_tq[4]; static unsigned long long s_tq_call[4]; static int s_tq_ok = -1, s_tq_n;
+static long long s_gl_cal;           /* platform ns - GL_TIMESTAMP ns */
+static double s_gl_done_acc; static long s_gl_done_n;
+#ifndef GL_TIMESTAMP
+#define GL_TIMESTAMP 0x8E28
+#endif
+#ifndef GL_QUERY_RESULT
+#define GL_QUERY_RESULT 0x8866
+#endif
+static void gl_pace_before_swap(void) {
+    extern unsigned long long platform_get_time_ns(void);
+    int i;
+    if (s_tq_ok < 0) {
+        PFN_pcGenQueries gen = (PFN_pcGenQueries)SDL_GL_GetProcAddress("glGenQueries");
+        p_qc = (PFN_pcQueryCounter)SDL_GL_GetProcAddress("glQueryCounter");
+        p_qget = (PFN_pcGetQueryObjectui64v)SDL_GL_GetProcAddress("glGetQueryObjectui64v");
+        p_gi64 = (PFN_pcGetInteger64v)SDL_GL_GetProcAddress("glGetInteger64v");
+        s_tq_ok = gen && p_qc && p_qget && p_gi64;
+        if (s_tq_ok) gen(4, s_tq);
+    }
+    if (!s_tq_ok) return;
+    if ((s_tq_n & 255) == 0) {   /* calibration */
+        GLint64 g = 0;
+        unsigned long long t0 = platform_get_time_ns(), t1;
+        p_gi64(GL_TIMESTAMP, &g);
+        t1 = platform_get_time_ns();
+        if (g > 0) s_gl_cal = (long long)((t0 + t1) / 2) - (long long)g;
+    }
+    i = s_tq_n & 3;
+    if (s_tq_n >= 2) {           /* the query of two swaps ago */
+        int k = (s_tq_n - 2) & 3;
+        GLuint64 v = 0;
+        p_qget(s_tq[k], GL_QUERY_RESULT, &v);
+        if (v && s_gl_cal) {
+            double d = (double)((long long)v + s_gl_cal) - (double)s_tq_call[k];
+            if (d > -2e6 && d < 100e6) { s_gl_done_acc += d > 0 ? d : 0; s_gl_done_n++; }
+        }
+    }
+    p_qc(s_tq[i], GL_TIMESTAMP);
+    s_tq_call[i] = 0;
+    s_tq_n++;
+}
+static double glb_present_done_ms(void) {
+    double r = s_gl_done_n ? s_gl_done_acc / (double)s_gl_done_n / 1e6 : 0.0;
+    s_gl_done_acc = 0; s_gl_done_n = 0;
+    return r;
+}
+static unsigned glb_present_id(void) { return s_gl_swaps; }
+static void glb_present_interval(int si) {
+    if (si < 1) si = 1;
+    if (si > 4) si = 4;
+    if (si != s_gl_si && s_gl_vsync) SDL_GL_SetSwapInterval(si);
+    s_gl_si = si;
+}
+#ifdef _WIN32
+/* the display's vblank from the desktop compositor (dwmapi.dll, loaded on
+ * first use); no per-present feedback */
+#include <windows.h>
+#include <dwmapi.h>
+static int glb_display_timing(GxDisplayTiming* t) {
+    extern unsigned long long platform_counter_time_ns(unsigned long long counter);
+    static HRESULT (WINAPI *get)(HWND, DWM_TIMING_INFO*);
+    static int tried;
+    DWM_TIMING_INFO ti;
+    LARGE_INTEGER f;
+    unsigned long long tv;
+    if (!s_gl_vsync) return 0;
+    if (!tried) {
+        HMODULE m = LoadLibraryA("dwmapi.dll");
+        tried = 1;
+        if (m) get = (HRESULT (WINAPI *)(HWND, DWM_TIMING_INFO*))(void (*)(void))GetProcAddress(m, "DwmGetCompositionTimingInfo");
+    }
+    if (!get) return 0;
+    memset(&ti, 0, sizeof ti);
+    ti.cbSize = sizeof ti;
+    if (FAILED(get(NULL, &ti)) || !ti.qpcVBlank || !ti.qpcRefreshPeriod) return 0;
+    tv = platform_counter_time_ns((unsigned long long)ti.qpcVBlank);
+    if (!tv) return 0;
+    QueryPerformanceFrequency(&f);
+    t->vblank_ns = tv;
+    t->vblank_count = (unsigned)ti.cRefresh;
+    t->period_ns = (double)ti.qpcRefreshPeriod * 1e9 / (double)f.QuadPart;
+    t->shown_id = 0;
+    t->shown_count = 0;
+    return 1;
+}
+#endif
+
 static void glb_present(void) {
+    extern unsigned long long platform_get_time_ns(void);
     SDL_Window* w = SDL_GL_GetCurrentWindow();
+    {   /* SMB2_PACE_MARK=1: the present id in the top-left corner for
+         * tools/hfr/dispcap (white, black, 16 bits MSB first) */
+        static int mark = -1;
+        if (mark < 0) mark = getenv("SMB2_PACE_MARK") && atoi(getenv("SMB2_PACE_MARK"));
+        if (mark && w) {
+            GLint box[4], fbo = 0;
+            GLfloat cc[4];
+            GLboolean sc = glIsEnabled(GL_SCISSOR_TEST);
+            int b, dw = 0, dh = 0;
+            unsigned id = s_gl_swaps + 1;
+            SDL_GL_GetDrawableSize(w, &dw, &dh);
+            glGetIntegerv(GL_SCISSOR_BOX, box);
+            glGetFloatv(GL_COLOR_CLEAR_VALUE, cc);
+            glGetIntegerv(0x8CA6 /* GL_DRAW_FRAMEBUFFER_BINDING */, &fbo);
+            if (fbo) p_bindfb_mark(0x8CA9 /* GL_DRAW_FRAMEBUFFER */, 0);
+            glEnable(GL_SCISSOR_TEST);
+            for (b = 0; b < 18; b++) {
+                int one = b == 0 ? 1 : b == 1 ? 0 : (int)((id >> (15 - (b - 2))) & 1);
+                glScissor(8 * b, dh - 8, 8, 8);
+                glClearColor(one ? 1.0f : 0.0f, one ? 1.0f : 0.0f, one ? 1.0f : 0.0f, 1.0f);
+                glClear(GL_COLOR_BUFFER_BIT);
+            }
+            if (fbo) p_bindfb_mark(0x8CA9, (GLuint)fbo);
+            glScissor(box[0], box[1], box[2], box[3]);
+            if (!sc) glDisable(GL_SCISSOR_TEST);
+            glClearColor(cc[0], cc[1], cc[2], cc[3]);
+        }
+    }
+    gl_pace_before_swap();
     if (w) SDL_GL_SwapWindow(w);
+    if (s_tq_ok > 0) s_tq_call[(s_tq_n - 1) & 3] = platform_get_time_ns();
+    s_gl_swaps++;
 }
 
 static void glb_set_vsync(int on) {
+    s_gl_vsync = on != 0;
+    s_gl_si = 1;
     SDL_GL_SetSwapInterval(on ? 1 : 0);
 }
 
@@ -2112,6 +2257,12 @@ const GxGpu gx_gpu_gl = {
     .copy_tex = glb_copy_tex,
     .copy_tex_result = glb_copy_tex_result,
     .gpu_mem = glb_gpu_mem,
+    .present_id = glb_present_id,
+    .present_interval = glb_present_interval,
+    .present_done_ms = glb_present_done_ms,
+#ifdef _WIN32
+    .display_timing = glb_display_timing,
+#endif
     .read_frame = glb_read_frame,
     .capture = glb_capture,
     .restore = glb_restore,

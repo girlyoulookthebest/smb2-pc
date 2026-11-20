@@ -111,6 +111,7 @@ run; `smb2_pc_port.exe --help` lists them all, the main ones:
 --renderer gl|d3d12   renderer
 --fps <n>             60 (default), 120, 144, 240, ..., display or uncapped
 --width <w> --height <h> --fullscreen --windowed --no-vsync --msaa <n>
+--display windowed|borderless|fullscreen   (fullscreen = exclusive)
 --language auto|en|de|fr|es|it|ja
 --button-style auto|gc|ps|ps4|ps5|xbox|switch
 --save-dir <dir>      folder for settings.dat and the memory card

@@ -25,8 +25,11 @@
 # Any stage: SMB2_PC_STAGE=<id> with a launcher Challenge mode plays that
 # stage id as floor 1 (pc_launcher.c), e.g. 9 = HOPPERS (Story 2-3):
 #   SMB2_PC_STAGE=9 modes.sh gl64 $WS/build64/bin hfr_roll -- --renderer gl
+# Stages whose files don't fit Challenge's heaps (the cutscene sets 407/415,
+# Monkey Boat's 140) are played under heap config 8 (alloc.c, pc_launcher.c).
 # Env passed to the exe: SMB2_RENDERER, SMB2_HEAP_CHECK=1 (heap overflow
-# guards, see os_shim.c).
+# guards, see os_shim.c), SMB2_TEST_OFFSCREEN=1 (window off-screen, never
+# activated: for runs while the desktop is in use).
 # Safety: only ever writes inside $WS (checked), memcard is restored from
 # $WS/tools/memcard_pristine after every run, save dir is per run.
 #
@@ -143,7 +146,7 @@ run_mode() { # label bindir mode extra...
   local try
   for try in 1 2 3; do
     local dip=${SMB2_PC_DIP:-}; [ "$mode" = golfend ] && dip=20000000
-    ( cd "$bin" && SMB2_PC_DIP=$dip SMB2_PC_LAUNCHER=$L WSLENV=SMB2_PC_DIP:SMB2_PC_GOLF_WIND:SMB2_PC_LAUNCHER:SMB2_PC_STAGE:SMB2_RENDERER:SMB2_HEAP_CHECK:SMB2_HFR_DEBUG:SMB2_HFR_FIXED:SMB2_HFR_DEBUG_FULL:SMB2_HFR_PROFILE:SMB2_HFR_DEFER:SMB2_HFR_SWITCH:SMB2_HFR_DEBUG2:SMB2_UPDATE_TEST:SMB2_UPDATE_TEMP:SMB2_UPDATE_DRYRUN timeout 600 ./smb2_pc_port.exe "${args[@]}" "$@" > "$out/log.txt" 2>&1; echo "exit $?" >> "$out/log.txt" )
+    ( cd "$bin" && SMB2_PC_DIP=$dip SMB2_PC_LAUNCHER=$L WSLENV=SMB2_TEST_OFFSCREEN:SMB2_PC_DIP:SMB2_PC_GOLF_WIND:SMB2_PC_LAUNCHER:SMB2_PC_STAGE:SMB2_RENDERER:SMB2_HEAP_CHECK:SMB2_HFR_DEBUG:SMB2_HFR_FIXED:SMB2_HFR_DEBUG_FULL:SMB2_HFR_PROFILE:SMB2_HFR_DEFER:SMB2_HFR_SWITCH:SMB2_HFR_DEBUG2:SMB2_UPDATE_TEST:SMB2_UPDATE_TEMP:SMB2_UPDATE_DRYRUN timeout 600 ./smb2_pc_port.exe "${args[@]}" "$@" > "$out/log.txt" 2>&1; echo "exit $?" >> "$out/log.txt" )
     # WSL interop sometimes fails to start the Windows process at all
     # ("UtilAcceptVsock: accept4 failed"): retry those, nothing else
     grep -aq 'main() started' "$out/log.txt" && break
