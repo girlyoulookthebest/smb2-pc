@@ -68,8 +68,10 @@ Download a release from the
   The memory card is stored next to the exe, settings in
   `%APPDATA%\SMB2\smb2_pc_port\`.
 
-A console window next to the game shows the log, which is useful for bug
-reports.
+The game's log, useful for bug reports, is saved in `logs\smb2_pc_port.log`
+next to the exe (installed game: `%APPDATA%\SMB2\installed\logs\`; the
+previous run's is `smb2_pc_port.old.log`). The console window next to the game
+shows its path, or the log itself if that folder isn't writable.
 
 ### Controls
 

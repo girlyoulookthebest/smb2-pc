@@ -171,7 +171,7 @@ What changes in installed mode:
 |---|---|---|---|
 | settings.dat, d3d12_shader_cache.bin | SDL pref path (`%APPDATA%\smb2\smb2_pc_port\`) or `--save-dir` | userdata (`%APPDATA%\SMB2\installed\`) | D |
 | memcard\slotA, memcard\backup | `<exe dir>\memcard\` (`--save-dir` doesn't move it) | `<userdata>\memcard\` | `D\memcard\` |
-| logs | console | `<userdata>\logs\smb2_pc_port.log` (previous run in `smb2_pc_port.old.log`), only when stdout is a console. Redirected output is left alone. | `D\logs\` |
+| logs | `<exe dir>\logs\smb2_pc_port.log` (1.1.14+; console if that folder isn't writable) | `<userdata>\logs\smb2_pc_port.log` (previous run in `smb2_pc_port.old.log`), only when stdout is a console. Redirected output is left alone. | `D\logs\` |
 
 The userdata folder is created with all its parents. It isn't created when
 `--save-dir` is given.

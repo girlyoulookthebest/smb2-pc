@@ -103,7 +103,11 @@ static int s_started;
  * the GC too when forced into a Challenge (Dolphin: 407 "tex:<bg_au_wat2.tpl>
  * not enough memory", 415 "<bg_au_bub2.gma>", 140 "<st140.gma>"); 186's
  * replay doesn't fit its stage heap.  alloc.c plays such a stage under config
- * 8, everything in one main heap, as author mode does for the cutscene sets. */
+ * 8, everything in one main heap, as author mode does for the cutscene sets.
+ * Some ids have models but no STAGE<id>.lz (103-113, 115, 116, 124-130, 141,
+ * 142, 151, 179, 180, 184, 198, 199; no mode plays them) and play
+ * STAGE000.lz's layout; 151, the only bg_pil stage, crashed the GC in
+ * the sea reflection (see rend_efc_ripple.c). */
 static int s_hook_stage;   /* stage the hook chose at the last start, 0 = none */
 
 static int stage_in_courses(int stageId)

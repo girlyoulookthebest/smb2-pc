@@ -451,8 +451,12 @@ void pc_install_setup_logs(void)
 {
 #ifdef _WIN32
     char dir[1200], log[1300], old[1300];
-    const char* base = pc_userdata_base();
-    if (!s_installed || !base) return;
+    /* installed: <userdata>\logs; portable: <exe dir>\logs, next to the
+     * portable memcard\ folder (a crash otherwise leaves no trace once
+     * the console closes).  If the folder isn't writable, the console
+     * keeps the output. */
+    const char* base = s_installed ? pc_userdata_base() : pc_exe_dir();
+    if (!base || !base[0]) return;
     /* only when stdout is the console: redirected output (tests, the
      * installer, a user's "> file") is left alone */
     if (GetFileType(GetStdHandle(STD_OUTPUT_HANDLE)) != FILE_TYPE_CHAR) return;
