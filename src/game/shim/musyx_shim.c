@@ -182,6 +182,7 @@ struct Stream
     s16 coefs[16];
     u64 posFix;      /* 32.32 samples played since activation */
     u64 written;     /* samples provided (ring starts full) */
+    int cat;         /* mixer category (ADSP_CAT_*), from pc_snd_stream_file */
 };
 static struct Stream s_streams[MAX_STREAMS];
 
@@ -219,6 +220,7 @@ u32 sndStreamAllocEx(u8 prio, void *buffer, u32 samples, u32 frq, u8 vol, u8 pan
         st->span = span > 127 ? 127 : span;
         st->update = update;
         st->user = user;
+        st->cat = ADSP_CAT_MUSIC;
         if (samples != ADSP_STREAM_SAMPLES)
             fprintf(stderr, "[snd] sndStreamAllocEx: unexpected ring size %u\n", samples);
         return (u32)i;
@@ -289,7 +291,7 @@ u32 sndStreamActivate(u32 id)
     st->posFix = 0;
     st->written = st->samples;
     stream_gains(st, &gl, &gr);
-    adsp_stream_start(id, st->coefs, adsp_step_for_rate(st->frq), gl, gr);
+    adsp_stream_start(id, st->coefs, adsp_step_for_rate(st->frq), gl, gr, st->cat);
     printf("[snd] stream %u start %u Hz vol %u pan %u span %u\n", id, st->frq, st->vol, st->pan, st->span);
     return 1;
 }
@@ -550,6 +552,7 @@ struct Voice
     int keyedOff;
     /* params */
     u8 vel;
+    int cat;                  /* mixer category (ADSP_CAT_*), from pc_snd_fx_cue */
     int note, detune;
     float vol, volTarget, volStep;
     int volRamp;
@@ -696,7 +699,7 @@ static void voice_start_sample(int i, u16 sid, u32 offset)
     v->lastGl = gl;
     v->lastGr = gr;
     v->stepSent = v->step;
-    adsp_voice_start(i, s->pcm + offset, v->simLen, v->simLoopStart, v->simLoopLen, v->step, gl, gr);
+    adsp_voice_start(i, s->pcm + offset, v->simLen, v->simLoopStart, v->simLoopLen, v->step, gl, gr, v->cat);
     voice_push_aux(i, 1);
 }
 
@@ -863,6 +866,7 @@ static void voice_init_from(int i, struct Voice *src, const u8 *cmds, u32 ncmds,
     v->pc = pc;
     v->loopPc = -1;
     v->vel = src->vel;
+    v->cat = src->cat;
     v->note = note;
     v->vol = src->vel;
     v->macroPan = 64;
@@ -964,6 +968,22 @@ int sndPopGroup(void)
 
 static u32 s_fxLogCount;
 
+/* Mixer category of the next sndFXStartParaInfo (pc_snd_fx_cue, set by
+ * sound.c from the game's sound table right before the call); anything
+ * started without one (baseball, ...) is a sound effect. */
+static int s_nextCat = ADSP_CAT_SFX;
+
+void pc_snd_set_next_category(int cat)
+{
+    s_nextCat = (cat >= 0 && cat < ADSP_CATS) ? cat : ADSP_CAT_SFX;
+}
+
+void pc_snd_stream_category(u32 id, int cat)
+{
+    if (id < MAX_STREAMS)
+        s_streams[id].cat = (cat >= 0 && cat < ADSP_CATS) ? cat : ADSP_CAT_MUSIC;
+}
+
 u32 sndFXStartParaInfo(u16 fid, u8 vol, u8 pan, u8 studio, SND_PARAMETER_INFO *info)
 {
     struct FxEnt *fx = NULL;
@@ -972,7 +992,10 @@ u32 sndFXStartParaInfo(u16 fid, u8 vol, u8 pan, u8 studio, SND_PARAMETER_INFO *i
     u32 ncmds, vid;
     int gi, k, i, count, oldest;
     struct Voice proto;
+    int cat = s_nextCat;
     (void)studio;
+
+    s_nextCat = ADSP_CAT_SFX;
 
     for (gi = s_ngroups - 1; gi >= 0 && !fx; gi--)
         for (k = 0; k < s_groups[gi].nfx; k++)
@@ -1024,6 +1047,7 @@ u32 sndFXStartParaInfo(u16 fid, u8 vol, u8 pan, u8 studio, SND_PARAMETER_INFO *i
     proto.vid = vid;
     proto.grp = g;
     proto.fxId = fid;
+    proto.cat = cat;
     proto.vel = (vol == 0xFF) ? fx->vol : vol;
     proto.ctrl7 = 127;
     proto.ctrl10 = (pan == 0xFF) ? fx->pan : pan;

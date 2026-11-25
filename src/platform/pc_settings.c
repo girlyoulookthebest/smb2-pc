@@ -1,7 +1,7 @@
 /* PC port settings: settings.dat persistence, first-run defaults, command-
  * line overrides, live apply, and the item API used by the settings screens.
  *
- * settings.dat is a small text file ("SMB2PC 1" header, key=value lines) in
+ * settings.dat is a small text file ("SMB2PC 2" header, key=value lines) in
  * platform_get_save_dir().  The legacy binary format (a raw GameSettings
  * struct with the ISO path appended) is read too, for its ISO path. */
 #include "pc_settings.h"
@@ -10,6 +10,7 @@
 #include "platform.h"
 #include "render.h"
 #include "audio.h"
+#include "audio_dsp.h"
 #include "../render/gx_gpu.h"
 #include <SDL2/SDL.h>
 #include <stdio.h>
@@ -81,6 +82,7 @@ static void set_defaults(PcSettings* s) {
     s->msaa = 4;
     s->aspect = PCS_ASPECT_AUTO;
     s->volume = 100;
+    s->vol_music = s->vol_sfx = s->vol_voice = s->vol_timer = 100;
     s->fps = 60;
     s->update_check = 1;
 }
@@ -95,6 +97,10 @@ static void sanitize(PcSettings* s) {
     s->msaa = s->msaa >= 8 ? 8 : s->msaa >= 4 ? 4 : s->msaa >= 2 ? 2 : 0;
     s->aspect = clampi(s->aspect, 0, 1);
     s->volume = clampi(s->volume, 0, 100);
+    s->vol_music = clampi(s->vol_music, 0, 100);
+    s->vol_sfx = clampi(s->vol_sfx, 0, 100);
+    s->vol_voice = clampi(s->vol_voice, 0, 100);
+    s->vol_timer = clampi(s->vol_timer, 0, 100);
     s->button_style = clampi(s->button_style, 0, PCB_SETTING_MENU_COUNT - 1);
     s->renderer = clampi(s->renderer, 0, PCS_RENDERER_COUNT - 1);
     s->language = clampi(s->language, 0, PCS_LANG_COUNT - 1);
@@ -167,6 +173,7 @@ static void settings_path(char* out, size_t n) {
 static void load_file(PcSettings* s) {
     char path[1100], line[1200];
     FILE* f;
+    int version;
     set_defaults(s);
     settings_path(path, sizeof path);
     f = fopen(path, "rb");
@@ -175,6 +182,10 @@ static void load_file(PcSettings* s) {
         printf("[settings] no %s - first start, using defaults (borderless fullscreen)\n", path);
         return;
     }
+    /* "SMB2PC <version>": 1 up to 1.1.13; 2 adds the sound mixer
+     * (vol_music/vol_sfx/vol_voice/vol_timer).  "volume" is the master
+     * volume in both, so a version 1 file keeps its volume as Master and the
+     * new channels start at 100. */
     if (!fgets(line, sizeof line, f) || strncmp(line, "SMB2PC ", 7) != 0) {
         /* legacy binary file: GameSettings struct, then the ISO path */
         long n;
@@ -191,6 +202,7 @@ static void load_file(PcSettings* s) {
         printf("[settings] migrated legacy settings.dat (iso=%s)\n", s->iso_path);
         return;
     }
+    version = atoi(line + 7);
     while (fgets(line, sizeof line, f)) {
         char* eq = strchr(line, '=');
         char* v;
@@ -207,6 +219,10 @@ static void load_file(PcSettings* s) {
         else if (!strcmp(line, "msaa"))    s->msaa = atoi(v);
         else if (!strcmp(line, "aspect"))  s->aspect = !strcmp(v, "stretch");
         else if (!strcmp(line, "volume"))  s->volume = atoi(v);
+        else if (!strcmp(line, "vol_music")) s->vol_music = atoi(v);
+        else if (!strcmp(line, "vol_sfx"))   s->vol_sfx = atoi(v);
+        else if (!strcmp(line, "vol_voice")) s->vol_voice = atoi(v);
+        else if (!strcmp(line, "vol_timer")) s->vol_timer = atoi(v);
         else if (!strcmp(line, "buttons")) s->button_style =
             !strcmp(v, "gc") ? PCB_SETTING_GC : !strcmp(v, "ps") ? PCB_SETTING_PS :
             !strcmp(v, "xbox") ? PCB_SETTING_XBOX : !strcmp(v, "switch") ? PCB_SETTING_SWITCH :
@@ -227,11 +243,13 @@ static void load_file(PcSettings* s) {
     }
     fclose(f);
     sanitize(s);
-    printf("[settings] loaded %s: %dx%d %s vsync=%d msaa=%d aspect=%s vol=%d\n",
-           path, s->width, s->height,
+    printf("[settings] loaded %s (v%d): %dx%d %s vsync=%d msaa=%d aspect=%s vol=%d "
+           "music=%d sfx=%d voice=%d timer=%d\n",
+           path, version, s->width, s->height,
            s->display_mode == PCS_FULLSCREEN ? "fullscreen" :
            s->display_mode == PCS_BORDERLESS ? "borderless" : "windowed",
-           s->vsync, s->msaa, s->aspect ? "stretch" : "auto", s->volume);
+           s->vsync, s->msaa, s->aspect ? "stretch" : "auto", s->volume,
+           s->vol_music, s->vol_sfx, s->vol_voice, s->vol_timer);
 }
 
 void pcs_load(void) {
@@ -248,12 +266,14 @@ void pcs_save(void) {
     settings_path(path, sizeof path);
     f = fopen(path, "wb");
     if (!f) { fprintf(stderr, "[settings] cannot write %s\n", path); return; }
-    fprintf(f, "SMB2PC 1\n");
+    fprintf(f, "SMB2PC 2\n");
     fprintf(f, "width=%d\nheight=%d\n", s_file.width, s_file.height);
     fprintf(f, "display=%s\n", s_file.display_mode == PCS_FULLSCREEN ? "fullscreen" :
                                s_file.display_mode == PCS_BORDERLESS ? "borderless" : "windowed");
     fprintf(f, "vsync=%d\nmsaa=%d\n", s_file.vsync, s_file.msaa);
     fprintf(f, "aspect=%s\nvolume=%d\n", s_file.aspect ? "stretch" : "auto", s_file.volume);
+    fprintf(f, "vol_music=%d\nvol_sfx=%d\nvol_voice=%d\nvol_timer=%d\n",
+            s_file.vol_music, s_file.vol_sfx, s_file.vol_voice, s_file.vol_timer);
     fprintf(f, "buttons=%s\n", s_button_style_keys[clampi(s_file.button_style, 0, PCB_SETTING_MENU_COUNT - 1)]);
     fprintf(f, "renderer=%s\n", s_file.renderer == PCS_RENDERER_D3D12 ? "d3d12" : "gl");
     fprintf(f, "language=%s\n", s_language_keys[clampi(s_file.language, 0, PCS_LANG_COUNT - 1)]);
@@ -428,6 +448,10 @@ void pcs_apply_video(void) {
 
 void pcs_apply_volume(void) {
     audio_set_master_volume(g_pcs.volume / 100.0f);
+    audio_set_category_volume(ADSP_CAT_MUSIC, g_pcs.vol_music / 100.0f);
+    audio_set_category_volume(ADSP_CAT_SFX, g_pcs.vol_sfx / 100.0f);
+    audio_set_category_volume(ADSP_CAT_VOICE, g_pcs.vol_voice / 100.0f);
+    audio_set_category_volume(ADSP_CAT_TIMER, g_pcs.vol_timer / 100.0f);
 }
 
 void pcs_apply_startup(void) {
@@ -533,16 +557,16 @@ static Tr s_item_names[PCS_ITEM_COUNT] = {
     { "Display", "Anzeige", "Affichage", "Pantalla", "Schermo", "がめんモード" },
     { "Resolution", "Auflösung", "Résolution", "Resolución", "Risoluzione", "かいぞうど" },
     { "V-Sync", "V-Sync", "V-Sync", "V-Sync", "V-Sync", "Vシンク" },
-    { "Frame rate", "Bildrate", "Fréquence d'images", "Velocidad de fotogramas", "Frequenza fotogrammi", "フレームレート" },
-    { "Anti-aliasing", "Kantenglättung", "Anticrénelage", "Antialiasing", "Antialiasing", "アンチエイリアス" },
+    { "Frame Rate", "Bildrate", "Fréquence d'images", "Velocidad de fotogramas", "Frequenza fotogrammi", "フレームレート" },
+    { "Anti-Aliasing", "Kantenglättung", "Anticrénelage", "Antialiasing", "Antialiasing", "アンチエイリアス" },
     { "Renderer", "Renderer", "Rendu", "Renderizador", "Renderer", "レンダラー" },
-    { "Aspect ratio", "Seitenverhältnis", "Format d'image", "Relación de aspecto", "Proporzioni", "アスペクトひ" },
+    { "Aspect Ratio", "Seitenverhältnis", "Format d'image", "Relación de aspecto", "Proporzioni", "アスペクトひ" },
     { "Volume", "Lautstärke", "Volume", "Volumen", "Volume", "おんりょう" },
     { "Buttons", "Tasten", "Boutons", "Botones", "Pulsanti", "ボタンひょうじ" },
     { "Language", "Sprache", "Langue", "Idioma", "Lingua", "げんご" },
     { "Controllers", "Controller", "Manettes", "Mandos", "Controller", "コントローラー" },
     { "Updates", "Updates", "Mises à jour", "Actualizaciones", "Aggiornamenti", "アップデート" },
-    { "Memory card", "Memory Card", "Carte mémoire", "Tarjeta de memoria", "Memory card", "メモリーカード" },
+    { "Memory Card", "Memory Card", "Carte mémoire", "Tarjeta de memoria", "Memory card", "メモリーカード" },
 };
 static Tr s_item_descs[PCS_ITEM_COUNT] = {
     { "Windowed, fullscreen or borderless fullscreen.",
@@ -875,6 +899,95 @@ void pcs_item_cancel(int item) {
     if (vs != g_pcs.vsync) render_set_vsync(g_pcs.vsync);
     if (vol != g_pcs.volume) pcs_apply_volume();
     if (asp != g_pcs.aspect) pcs_on_window_resized();
+}
+
+/* ------------------------------------------------------------ sound mixer */
+static int* mix_field(PcSettings* s, int ch) {
+    switch (ch) {
+    case PCS_MIX_MASTER: return &s->volume;
+    case PCS_MIX_MUSIC:  return &s->vol_music;
+    case PCS_MIX_SFX:    return &s->vol_sfx;
+    case PCS_MIX_VOICE:  return &s->vol_voice;
+    case PCS_MIX_TIMER:  return &s->vol_timer;
+    }
+    return NULL;
+}
+
+int pcs_mix_get(int ch) {
+    int* f = mix_field(&g_pcs, ch);
+    return f ? *f : 0;
+}
+
+bool pcs_mix_set(int ch, int value) {
+    int* f = mix_field(&g_pcs, ch);
+    if (!f) return false;
+    value = clampi(value, 0, 100);
+    if (value == *f) return false;
+    *f = value;
+    pcs_apply_volume();
+    return true;
+}
+
+void pcs_mix_save(void) {
+    int ch, changed = 0;
+    if (!s_loaded) pcs_load();
+    for (ch = 0; ch < PCS_MIX_COUNT; ch++) {
+        int* f = mix_field(&s_file, ch);
+        if (*f != pcs_mix_get(ch)) {
+            *f = pcs_mix_get(ch);
+            changed = 1;
+        }
+    }
+    if (!changed) return;
+    printf("[settings] mixer: master %d music %d sfx %d voice %d timer %d\n", s_file.volume,
+           s_file.vol_music, s_file.vol_sfx, s_file.vol_voice, s_file.vol_timer);
+    pcs_save();
+}
+
+static Tr s_mix_names[PCS_MIX_COUNT] = {
+    { "Master", "Gesamt", "Général", "General", "Generale", "ぜんたい" },
+    { "Music", "Musik", "Musique", "Música", "Musica", "おんがく" },
+    { "Sound Effects", "Soundeffekte", "Effets sonores", "Efectos", "Effetti sonori", "こうかおん" },
+    { "Voices", "Stimmen", "Voix", "Voces", "Voci", "ボイス" },
+    { "Timer Warning", "Zeitwarnung", "Alerte chrono", "Cuenta atrás", "Avviso tempo", "タイマーのおと" },
+};
+static Tr s_mix_descs[PCS_MIX_COUNT] = {
+    { "Volume of all sound.",
+      "Lautstärke aller Töne.",
+      "Volume de tous les sons.",
+      "Volumen de todo el sonido.",
+      "Volume di tutti i suoni.",
+      "すべての おとの おんりょう。" },
+    { "Volume of the music.",
+      "Lautstärke der Musik.",
+      "Volume de la musique.",
+      "Volumen de la música.",
+      "Volume della musica.",
+      "おんがくの おんりょう。" },
+    { "Volume of the sound effects.",
+      "Lautstärke der Soundeffekte.",
+      "Volume des effets sonores.",
+      "Volumen de los efectos de sonido.",
+      "Volume degli effetti sonori.",
+      "こうかおんの おんりょう。" },
+    { "Announcer and monkey voices.",
+      "Stimmen des Sprechers und der Affen.",
+      "Voix de l'annonceur et des singes.",
+      "Voces del locutor y de los monos.",
+      "Voci dell'annunciatore e delle scimmie.",
+      "アナウンスと サルの こえ。" },
+    { "Timer ticks and countdown beeps; 0% is off.",
+      "Ticken und Countdown-Töne der Zeit; 0% = aus.",
+      "Tic-tac et bips du chrono ; 0% = coupé.",
+      "Tictac y pitidos del tiempo; 0% = apagado.",
+      "Ticchettio e bip del tempo; 0% = spento.",
+      "タイマーの カウントの おと。0%で きえます。" },
+};
+const char* pcs_mix_name(int ch) {
+    return (ch >= 0 && ch < PCS_MIX_COUNT) ? pc_text_pick(s_mix_names[ch]) : "";
+}
+const char* pcs_mix_desc(int ch) {
+    return (ch >= 0 && ch < PCS_MIX_COUNT) ? pc_text_pick(s_mix_descs[ch]) : "";
 }
 
 /* --------------------------------------------------------------- overlay */

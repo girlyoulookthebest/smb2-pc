@@ -42,7 +42,7 @@ Both definitions reach only `pc_update.c`, so changing them rebuilds one file.
    answered check is 24 h old or more (`update_last` in settings.dat; a check
    that got no answer, e.g. offline, does not count). Never in automated runs
    (`--input-script`, `--dump-interval`, `--exit-frame`) unless the test hook
-   is set. "Check now" on the Updates screen checks any time.
+   is set. "Check Now" on the Updates screen checks any time.
 3. **Box** (automatic check): only at a safe moment. `pc_menu_quit_tick`
    (pc_quit.c, called by the title screen and Mode Select) requests it when
    the screen is idle (the same condition that allows its Quit box: real title
@@ -88,7 +88,7 @@ Both definitions reach only `pc_update.c`, so changing them rebuilds one file.
 Options > Game Screen has one row for the updater, **Updates**, after
 "Controllers": its value shows the automatic check (On/Off) and A opens the
 **Updates screen** (version, installed/portable, repo, "Check automatically"
-On/Off, "Check now", Back, status of the last check). The page uses a 19 px
+On/Off, "Check Now", Back, status of the last check). The page uses a 19 px
 row pitch so its 15 rows (2 game rows, 12 PC rows, Quit to Desktop) fit above
 the description box. The F1 overlay has the same row (22 px pitch, 13 rows)
 and shows the version at the top right. Script token `UPD` opens the Updates

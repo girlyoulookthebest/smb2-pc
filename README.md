@@ -100,10 +100,14 @@ is GameCube A); Nintendo pads are mapped by label, as in Nintendo's own ports.
 ### Settings
 
 In game: Options > Game Screen (resolution, fullscreen, aspect, frame rate,
-vsync, MSAA, renderer, language, button prompts, volume, controllers,
-updates, memory card) or the F1 overlay, which also shows the version. The Updates row
+vsync, MSAA, renderer, language, button prompts, controllers,
+updates, memory card) or the F1 overlay (these plus the master volume), which
+also shows the version. Options > Sound has the game's Mono/Stereo setting
+and a mixer: Master, Music, Sound Effects, Voices (announcer and monkeys) and
+Timer Warning (the stage timer's ticks and countdown beeps; 0% turns them
+off). The Updates row
 opens a screen with "Check automatically" (On by default; at most once a
-day, only the version number is sent) and "Check now".
+day, only the version number is sent) and "Check Now".
 They are stored in `settings.dat`. Command-line options override them for one
 run; `smb2_pc_port.exe --help` lists them all, the main ones:
 
@@ -139,7 +143,7 @@ be used.
    - **A real memory card**: dump it with the GCMM homebrew on a softmodded Wii
      or GameCube, either the whole card (`.raw`) or the single save (`.gci`).
 2. Import it, any of:
-   - In game: Options > Game Screen > Memory card (or F1 > Memory card) >
+   - In game: Options > Game Screen > Memory Card (or F1 > Memory Card) >
      Import a save..., pick the file. Allowed on the title screen and in the
      menus. If you already have a save, the game asks before replacing it and
      keeps a copy in `memcard\backup\`. The game then closes; start it again
@@ -151,7 +155,7 @@ be used.
    - Command line: `smb2_pc_port.exe --import-save <file.gci|card.raw>`
      (prints the result and exits).
 
-To go the other way (back to Dolphin or a real card): Memory card > Export
+To go the other way (back to Dolphin or a real card): Memory Card > Export
 saves..., or `smb2_pc_port.exe --export-save <folder>`. This writes `.gci`
 files: import them in Dolphin's Memory Card Manager (or drop them into its GCI
 folder), or copy them to a real card with GCMM.

@@ -36,10 +36,10 @@ enum {
 };
 
 typedef struct { uint32_t type, size; int32_t idx, pad; } CmdHdr;
-typedef struct { const int16_t *pcm; uint32_t len, loopStart, loopLen; uint64_t step; float gl, gr; } CmdVStart;
+typedef struct { const int16_t *pcm; uint32_t len, loopStart, loopLen; uint64_t step; float gl, gr; int32_t cat, pad; } CmdVStart;
 typedef struct { uint64_t step; float gl, gr; } CmdSet;
 typedef struct { uint32_t off, bytes; } CmdUpload;  /* + data */
-typedef struct { int16_t coefs[16]; uint64_t step; float gl, gr; } CmdSStart;
+typedef struct { int16_t coefs[16]; uint64_t step; float gl, gr; int32_t cat, pad; } CmdSStart;
 typedef struct { float g[ADSP_AUX_GAINS]; } CmdVAux;
 typedef struct { adsp_aux_fn fn[2]; void *user[2]; } CmdAuxSet;
 typedef struct { adsp_fn fn; uint32_t bytes, pad; } CmdRun;   /* + arg bytes */
@@ -97,6 +97,7 @@ typedef struct {
     float gl, gr, cl, cr;
     float ga[ADSP_AUX_GAINS], ca[ADSP_AUX_GAINS];   /* aux send target / current */
     int auxFresh;                                    /* started this tick */
+    int cat;                                         /* ADSP_CAT_* */
 } DVoice;
 
 typedef struct {
@@ -108,11 +109,26 @@ typedef struct {
     int32_t h1, h2, shift, c1, c2;
     int16_t s0, s1;
     float gl, gr, cl, cr;
+    int cat;                                         /* ADSP_CAT_* */
 } DStream;
 
 static DVoice  s_voices[ADSP_MAX_VOICES];
 static DStream s_streams[ADSP_MAX_STREAMS];
 static atomic_uint s_masterBits;
+
+/* Mixer (docs/audio.md "Mixer"): user volume per category, set from the game
+ * thread, ramped over one tick on the worker.  Per-category output stats
+ * (after the category volume, before master and limiter) for the summary
+ * printed at exit. */
+static atomic_uint s_catBits[ADSP_CATS] = { 0x3F800000u, 0x3F800000u, 0x3F800000u, 0x3F800000u };
+static float s_catCur[ADSP_CATS] = { 1.0f, 1.0f, 1.0f, 1.0f };
+static float s_catPeak[ADSP_CATS];
+static double s_catSq[ADSP_CATS];
+/* SMB2_MIXLOG=1: the same stats per second of output ("[mixlog]" lines) */
+static int s_mixLog = -1;
+static float s_winPeak[ADSP_CATS];
+static double s_winSq[ADSP_CATS];
+static const char *const s_catNames[ADSP_CATS] = { "sfx", "music", "voice", "timer" };
 
 /* MusyX aux buses (studio 0): callbacks, the DSP's triple-buffered s32
  * L/R/S aux buffers, the 32 kHz send mix of the current tick and the
@@ -196,7 +212,7 @@ static inline int16_t stream_decode(DStream *st)
 /* One voice's aux sends for this tick, rendered at the DSP's 32 kHz from
  * the same source position and linear interpolation as the main pass (a
  * copy of the state: the main pass below advances the voice). */
-static void render_voice_aux(DVoice *vo)
+static void render_voice_aux(DVoice *vo, float catGain)
 {
     float d[ADSP_AUX_GAINS], c[ADSP_AUX_GAINS];
     uint64_t pos = vo->pos, step = vo->step + (vo->step >> 1);   /* 48k step * 1.5 */
@@ -236,7 +252,7 @@ static void render_voice_aux(DVoice *vo)
         }
         frac = (float)(uint32_t)pos * (1.0f / 4294967296.0f);
         s = vo->pcm[ip] + ((ip1 < vo->len ? vo->pcm[ip1] : 0) - vo->pcm[ip]) * frac;
-        s *= 1.0f / 32768.0f;
+        s *= catGain * (1.0f / 32768.0f);
         for (k = 0; k < ADSP_AUX_GAINS; k++) {
             c[k] += d[k];
             s_auxBus[k / 3][k % 3][j] += s * c[k];
@@ -304,18 +320,32 @@ static void aux_process(float *mix)
 static void render_tick(void)
 {
     float mix[ADSP_TICK_FRAMES * 2];
+    float cmix[ADSP_CATS][ADSP_TICK_FRAMES * 2];   /* per-category sub-mixes */
+    float cg[ADSP_CATS][ADSP_TICK_FRAMES];         /* category gain ramps */
     int16_t pcm16[ADSP_TICK_FRAMES * 2];
     float master;
     uint32_t bits;
-    int i, n;
+    int i, n, c;
 
     memset(mix, 0, sizeof(mix));
+    memset(cmix, 0, sizeof(cmix));
+    for (c = 0; c < ADSP_CATS; c++) {
+        float target, d;
+        bits = atomic_load_explicit(&s_catBits[c], memory_order_relaxed);
+        memcpy(&target, &bits, 4);
+        d = (target - s_catCur[c]) / ADSP_TICK_FRAMES;
+        for (i = 0; i < ADSP_TICK_FRAMES; i++)
+            cg[c][i] = s_catCur[c] + d * (i + 1);
+        s_catCur[c] = target;
+    }
 
     for (n = 0; n < ADSP_MAX_STREAMS; n++) {
         DStream *st = &s_streams[n];
-        float dl, dr;
+        float dl, dr, *out, *g;
         if (!st->on)
             continue;
+        out = cmix[st->cat];
+        g = cg[st->cat];
         dl = (st->gl - st->cl) / ADSP_TICK_FRAMES;
         dr = (st->gr - st->cr) / ADSP_TICK_FRAMES;
         for (i = 0; i < ADSP_TICK_FRAMES; i++) {
@@ -329,8 +359,8 @@ static void render_tick(void)
             s = (st->s0 + (st->s1 - st->s0) * frac) * (1.0f / 32768.0f);
             st->cl += dl;
             st->cr += dr;
-            mix[i * 2] += s * st->cl;
-            mix[i * 2 + 1] += s * st->cr;
+            out[i * 2] += s * st->cl * g[i];
+            out[i * 2 + 1] += s * st->cr * g[i];
             st->pos += st->step;
         }
         st->cl = st->gl;
@@ -341,10 +371,12 @@ static void render_tick(void)
 
     for (n = 0; n < ADSP_MAX_VOICES; n++) {
         DVoice *vo = &s_voices[n];
-        float dl, dr;
+        float dl, dr, *out, *g;
         if (!vo->on)
             continue;
-        render_voice_aux(vo);
+        render_voice_aux(vo, s_catCur[vo->cat]);
+        out = cmix[vo->cat];
+        g = cg[vo->cat];
         dl = (vo->gl - vo->cl) / ADSP_TICK_FRAMES;
         dr = (vo->gr - vo->cr) / ADSP_TICK_FRAMES;
         for (i = 0; i < ADSP_TICK_FRAMES; i++) {
@@ -369,14 +401,35 @@ static void render_tick(void)
             s *= 1.0f / 32768.0f;
             vo->cl += dl;
             vo->cr += dr;
-            mix[i * 2] += s * vo->cl;
-            mix[i * 2 + 1] += s * vo->cr;
+            out[i * 2] += s * vo->cl * g[i];
+            out[i * 2 + 1] += s * vo->cr * g[i];
             vo->pos += vo->step;
         }
         vo->cl = vo->gl;
         vo->cr = vo->gr;
         if (vo->stopping)
             vo->on = 0;
+    }
+
+    for (c = 0; c < ADSP_CATS; c++)
+        for (i = 0; i < ADSP_TICK_FRAMES * 2; i++) {
+            float x = cmix[c][i], a = fabsf(x);
+            mix[i] += x;
+            if (a > s_catPeak[c])
+                s_catPeak[c] = a;
+            s_catSq[c] += (double)x * x;
+            if (a > s_winPeak[c])
+                s_winPeak[c] = a;
+            s_winSq[c] += (double)x * x;
+        }
+    if (s_mixLog > 0 && (s_renderedFrames + ADSP_TICK_FRAMES) % ADSP_RATE == 0) {
+        printf("[mixlog] t=%4.0f s", (double)(s_renderedFrames + ADSP_TICK_FRAMES) / ADSP_RATE);
+        for (c = 0; c < ADSP_CATS; c++) {
+            printf("  %s %.3f/%.4f", s_catNames[c], s_winPeak[c], sqrt(s_winSq[c] / (2.0 * ADSP_RATE)));
+            s_winPeak[c] = 0.0f;
+            s_winSq[c] = 0.0;
+        }
+        printf("\n");
     }
 
     aux_process(mix);
@@ -479,6 +532,7 @@ static void worker_process(void)
             vo->loopStart = c->loopStart; vo->loopLen = c->loopLen;
             vo->pos = 0; vo->step = c->step;
             vo->gl = vo->cl = c->gl; vo->gr = vo->cr = c->gr;
+            vo->cat = (c->cat >= 0 && c->cat < ADSP_CATS) ? c->cat : ADSP_CAT_SFX;
             memset(vo->ga, 0, sizeof(vo->ga));
             memset(vo->ca, 0, sizeof(vo->ca));
             vo->auxFresh = 1;
@@ -532,6 +586,7 @@ static void worker_process(void)
             st->shift = 0; st->c1 = st->c2 = 0;
             st->gl = c->gl; st->gr = c->gr;
             st->cl = st->cr = 0;   /* fade in over the first tick */
+            st->cat = (c->cat >= 0 && c->cat < ADSP_CATS) ? c->cat : ADSP_CAT_MUSIC;
             break;
         }
         case CMD_SSET: {
@@ -601,12 +656,12 @@ static void device_cb(ma_device *dev, void *out, const void *in, ma_uint32 frame
 /* command API (game thread)                                           */
 
 void adsp_voice_start(int v, const int16_t *pcm, uint32_t len, uint32_t loopStart,
-                      uint32_t loopLen, uint64_t step, float gl, float gr)
+                      uint32_t loopLen, uint64_t step, float gl, float gr, int cat)
 {
     CmdVStart *c = q_reserve(CMD_VSTART, v, sizeof(*c));
     if (!c) return;
     c->pcm = pcm; c->len = len; c->loopStart = loopStart; c->loopLen = loopLen;
-    c->step = step; c->gl = gl; c->gr = gr;
+    c->step = step; c->gl = gl; c->gr = gr; c->cat = cat;
 }
 
 void adsp_voice_set(int v, uint64_t step, float gl, float gr)
@@ -650,12 +705,12 @@ void adsp_stream_upload(int s, uint32_t off, const void *src, uint32_t bytes)
     memcpy(c + 1, src, bytes);
 }
 
-void adsp_stream_start(int s, const int16_t coefs[16], uint64_t step, float gl, float gr)
+void adsp_stream_start(int s, const int16_t coefs[16], uint64_t step, float gl, float gr, int cat)
 {
     CmdSStart *c = q_reserve(CMD_SSTART, s, sizeof(*c));
     if (!c) return;
     memcpy(c->coefs, coefs, sizeof(c->coefs));
-    c->step = step; c->gl = gl; c->gr = gr;
+    c->step = step; c->gl = gl; c->gr = gr; c->cat = cat;
 }
 
 void adsp_stream_set(int s, uint64_t step, float gl, float gr)
@@ -691,6 +746,15 @@ void adsp_set_master(float g)
     atomic_store(&s_masterBits, bits);
 }
 
+void adsp_set_category_gain(int cat, float g)
+{
+    uint32_t bits;
+    if (cat < 0 || cat >= ADSP_CATS)
+        return;
+    memcpy(&bits, &g, 4);
+    atomic_store(&s_catBits[cat], bits);
+}
+
 /* ------------------------------------------------------------------ */
 /* audio.h API                                                         */
 
@@ -703,6 +767,10 @@ bool audio_init(void)
         return true;
     s_inited = 1;
     adsp_set_master(1.0f);
+    {
+        const char *e = getenv("SMB2_MIXLOG");
+        s_mixLog = (e && *e && *e != '0');
+    }
 
     s_q = malloc(CMDQ_SIZE);
     s_sem = SDL_CreateSemaphore(0);
@@ -771,6 +839,16 @@ void audio_shutdown(void)
            (double)s_renderedFrames / ADSP_RATE, s_peak,
            (double)s_limTicks * ADSP_TICK_FRAMES / ADSP_RATE, s_limMin, (unsigned long long)s_clipped,
            s_outDroppedTicks, s_outUnderruns, s_qDropped);
+    {
+        int c;
+        for (c = 0; c < ADSP_CATS; c++) {
+            float g;
+            uint32_t bits = atomic_load(&s_catBits[c]);
+            memcpy(&g, &bits, 4);
+            printf("[audio] mixer %-5s volume %3.0f%%: peak %.4f rms %.5f\n", s_catNames[c], g * 100.0f,
+                   s_catPeak[c], s_renderedFrames ? sqrt(s_catSq[c] / (2.0 * (double)s_renderedFrames)) : 0.0);
+        }
+    }
     fflush(stdout);
 }
 
@@ -781,6 +859,7 @@ unsigned audio_underrun_count(void) { return s_outUnderruns; }
 void audio_update(void) { }
 
 void audio_set_master_volume(float v) { adsp_set_master(v < 0 ? 0 : v > 1 ? 1 : v); }
+void audio_set_category_volume(int cat, float v) { adsp_set_category_gain(cat, v < 0 ? 0 : v > 1 ? 1 : v); }
 void audio_set_music_volume(float v) { (void)v; }
 void audio_set_sfx_volume(float v) { (void)v; }
 
@@ -1094,6 +1173,8 @@ void audio_set_master_volume(float volume) {
 void audio_set_music_volume(float volume) {
     g_audio.music_volume = volume < 0.0f ? 0.0f : (volume > 1.0f ? 1.0f : volume);
 }
+
+void audio_set_category_volume(int cat, float volume) { (void)cat; (void)volume; }
 
 void audio_set_sfx_volume(float volume) {
     g_audio.sfx_volume = volume < 0.0f ? 0.0f : (volume > 1.0f ? 1.0f : volume);

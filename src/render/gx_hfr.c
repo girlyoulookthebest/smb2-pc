@@ -50,6 +50,9 @@ typedef struct {
     unsigned char tcfg;   /* TEV configurations equal */
     int rot;              /* index into rots (H_SLERP) */
     unsigned char tmmask; /* texture matrices that differ in the pair */
+    unsigned texset;      /* hash of texslots (0 = none) */
+    unsigned texslots[4]; /* pc_hfr_texslots: owner of texcoords 2k, 2k+1 */
+    signed char smap[4];  /* pair with another texset: newer slot -> older slot, -1 */
     uint64_t vhash;       /* hash of the vertices (equal = same vertices) */
 } HfrDraw;
 
@@ -111,6 +114,10 @@ static struct {
 static unsigned s_tag_stack[16];
 static int s_tag_depth;
 static unsigned s_tag;
+/* what the texture matrices of the following draws project
+ * (pc_hfr_texslots): pairs with different sets blend slot by slot */
+static unsigned s_texset;
+static unsigned s_texslots[4];
 
 /* camera views (pc_hfr_view) per tick, for cut detection */
 #define HFR_NCAM 8
@@ -449,6 +456,8 @@ static void rec_draw(const GxDrawCall* d) {
     r->match = -1;
     r->rot = -1;
     r->tag = s_tag;
+    r->texset = s_texset;
+    if (s_texset) memcpy(r->texslots, s_texslots, sizeof s_texslots);
     r->vhash = s_last_vhash;
     {
         const float* m = d->dc->mv;
@@ -628,6 +637,8 @@ void hfr_tick_begin(void) {
     s_recording = 1;
     s_tag_depth = 0;
     s_tag = 0;
+    s_texset = 0;
+    memset(s_texslots, 0, sizeof s_texslots);
     node_map_clear();
     /* prologue: the backend state this frame starts from */
     if (s_trk.vp_ok) rec_op(OP_VIEWPORT, s_trk.vp, 4, NULL, 0, NULL);
@@ -768,17 +779,22 @@ static void lerpn(float* out, const float* p, const float* c, float a, int n) {
 }
 
 /* texture matrix: scroll translations that wrapped by whole repeats blend
- * the short way; other jumps keep the base value */
+ * the short way; any other jump keeps the whole base matrix (o holds it on
+ * entry: a matrix blended in some elements and not in others projects
+ * nowhere near either tick, e.g. a shadow over a whole floor) */
 static void texmtx_interp(float* o, const float* p, const float* c, float a) {
+    float t[16];
     int i;
     for (i = 0; i < 16; i++) {
         float d = c[i] - p[i];
-        if (fabsf(d) <= 0.5f) { o[i] = p[i] + d * a; continue; }
+        if (fabsf(d) <= 0.5f) { t[i] = p[i] + d * a; continue; }
         if (i >= 12) {
             float r = d - floorf(d + 0.5f);
-            if (fabsf(r) <= 0.25f) { o[i] = p[i] + r * a; continue; }
+            if (fabsf(r) <= 0.25f) { t[i] = p[i] + r * a; continue; }
         }
+        return;
     }
+    memcpy(o, t, sizeof t);
 }
 
 /* ---- matching ---- */
@@ -1166,6 +1182,11 @@ static int pair_setup(HfrStream* P, HfrStream* C, HfrDraw* d, const HfrDraw* m) 
         if (ta != la || tb != lb) { la = ta; lb = tb; lr = tc_blendable_differ(ta, tb); }
         d->tcb = (unsigned char)lr;
     }
+    /* texture matrices / TEV colours of another projection (a shadow
+     * receiver drawn with other casters): geometry only */
+    /* another set of projections (a shadow receiver drawn with other
+     * casters): TEV colours as drawn, texture matrices slot by slot */
+    if (d->texset != m->texset) d->tcb = 0;
     if (memcmp(cc, pc, sizeof *cc) == 0) {
         d->how = H_SAME;
         return 0;
@@ -1175,6 +1196,15 @@ static int pair_setup(HfrStream* P, HfrStream* C, HfrDraw* d, const HfrDraw* m) 
         d->tmmask = 0;
         for (t = 0; t < 8; t++)
             if (memcmp(pc->texmtx[t], cc->texmtx[t], sizeof pc->texmtx[t])) d->tmmask |= (unsigned char)(1 << t);
+        if (d->texset && m->texset) {   /* blended slot by slot in replay */
+            int i, j;
+            d->tmmask = 0;
+            for (i = 0; i < 4; i++) {
+                d->smap[i] = -1;
+                for (j = 0; d->texslots[i] && j < 4; j++)
+                    if (m->texslots[j] == d->texslots[i]) { d->smap[i] = (signed char)j; break; }
+            }
+        }
     }
     if (!d->depth_clamp) {
         HfrRot r;
@@ -1432,6 +1462,20 @@ static void replay(HfrStream* B, int from, int to, float alpha, int interp, int 
                     for (t = 0; cd->tmmask >> t; t++)
                         if ((cd->tmmask >> t) & 1)
                             texmtx_interp(dc.texmtx[t], pc->texmtx[t], cc->texmtx[t], alpha);
+                    if (cd->texset && pd->texset) {
+                        /* projections per slot (shadow casters): slot i of
+                         * the newer draw (texcoords 2i, 2i+1) blends with the
+                         * older draw's slot of the same caster, linearly (a
+                         * projection moves, it does not wrap like a scroll);
+                         * a slot without one keeps the base tick's */
+                        int i;
+                        for (i = 0; i < 4; i++) {
+                            int j = cd->smap[i], bs = base_is_p ? j : i;
+                            if (j < 0) continue;
+                            lerpn(dc.texmtx[2 * bs], pc->texmtx[2 * j], cc->texmtx[2 * i], alpha, 16);
+                            lerpn(dc.texmtx[2 * bs + 1], pc->texmtx[2 * j + 1], cc->texmtx[2 * i + 1], alpha, 16);
+                        }
+                    }
                     lerpn(dc.tev_c0, pc->tev_c0, cc->tev_c0, alpha, 4);
                     lerpn(dc.tev_c1, pc->tev_c1, cc->tev_c1, alpha, 4);
                     if (pc->fog[0] == cc->fog[0]) lerpn(&dc.fog[1], &pc->fog[1], &cc->fog[1], alpha, 2);
@@ -1590,6 +1634,18 @@ void pc_hfr_node_begin(void* node, void* func) {
     pc_hfr_tag_push(7, t ? t : (unsigned)((uintptr_t)func * 2654435761u));
 }
 void pc_hfr_node_end(void) { pc_hfr_tag_pop(); }
+void pc_hfr_texslots(const unsigned* ids) {
+    unsigned h = 0;
+    int k;
+    if (!s_recording) return;
+    if (ids)
+        for (k = 0; k < 4; k++) h = h * 0x9E3779B1u + ids[k] + 1;
+    if (h == s_texset && (!ids || !memcmp(ids, s_texslots, sizeof s_texslots))) return;
+    gx_hfr_flush();   /* the pending batch was drawn with the previous set */
+    s_texset = h;
+    if (ids) memcpy(s_texslots, ids, sizeof s_texslots);
+    else memset(s_texslots, 0, sizeof s_texslots);
+}
 
 /* reason 1 (camera_clear) is soft: some modes reset a camera every tick
  * while it stays put (baseball); it only cuts when a camera view changed */

@@ -26,7 +26,11 @@ typedef struct {
     int msaa;            /* 0, 2, 4, 8 (applies on restart) */
     int aspect;          /* PCS_ASPECT_AUTO: 4:3 or 16:9 box from the game's
                           * TV-monitor setting; PCS_ASPECT_STRETCH: fill */
-    int volume;          /* master volume, 0..100 */
+    int volume;          /* master volume, 0..100 (Options > Sound > Master) */
+    int vol_music;       /* mixer (Options > Sound page, docs/audio.md "Mixer"), */
+    int vol_sfx;         /*   0..100 each */
+    int vol_voice;
+    int vol_timer;       /* stage timer ticks / countdown beeps; 0 = off */
     int button_style;    /* button prompts: 0 auto, 1 GameCube, 2 PlayStation,
                           * 3 Xbox, 4 Switch (PCB_SETTING_*, button_prompts.h) */
     int renderer;        /* PCS_RENDERER_* (applies on restart) */
@@ -107,6 +111,16 @@ void pcs_item_begin_edit(int item);     /* remember value for cancel */
 bool pcs_item_step(int item, int dir);  /* -1/+1; true if changed */
 void pcs_item_confirm(int item);        /* apply deferred + save */
 void pcs_item_cancel(int item);         /* restore + re-apply */
+
+/* ---- sound mixer (the game's Options > Sound page, pc_settings_menu.c) ---- */
+enum { PCS_MIX_MASTER, PCS_MIX_MUSIC, PCS_MIX_SFX, PCS_MIX_VOICE, PCS_MIX_TIMER, PCS_MIX_COUNT };
+#define PCS_MIX_STEP 10   /* the old Volume item's step too */
+int  pcs_mix_get(int ch);                 /* 0..100 */
+/* set + apply live (not saved; pcs_mix_save writes settings.dat) */
+bool pcs_mix_set(int ch, int value);
+void pcs_mix_save(void);                  /* if anything changed since the last save */
+const char* pcs_mix_name(int ch);
+const char* pcs_mix_desc(int ch);
 
 /* Controller Sticks screen (src/game/shim/pc_stick_menu.c): run it modally
  * (`captured`: the frame behind is already captured, as in the F1 overlay),

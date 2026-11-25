@@ -87,6 +87,8 @@ void g_crossfade_music(void);
 void audio_set_master_volume(float volume);
 void audio_set_music_volume(float volume);
 void audio_set_sfx_volume(float volume);
+/* mixer category volume 0..1 (ADSP_CAT_* in audio_dsp.h) */
+void audio_set_category_volume(int cat, float volume);
 
 /* Audio device enumeration */
 typedef struct {

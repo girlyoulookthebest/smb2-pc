@@ -54,11 +54,11 @@ enum { ROW_PAD, ROW_GATE, ROW_DEADZONE, ROW_SENS, ROW_CALIBRATE, ROW_RESET, ROW_
 
 static Tr s_row_names[ROWS] = {
     { "Controller", "Controller", "Manette", "Mando", "Controller", "コントローラー" },
-    { "Stick gate", "Stick-Form", "Forme du stick", "Forma de la palanca", "Forma della levetta", "スティックのかたち" },
-    { "Dead zone", "Totzone", "Zone morte", "Zona muerta", "Zona morta", "あそび" },
+    { "Stick Gate", "Stick-Form", "Forme du stick", "Forma de la palanca", "Forma della levetta", "スティックのかたち" },
+    { "Dead Zone", "Totzone", "Zone morte", "Zona muerta", "Zona morta", "あそび" },
     { "Sensitivity", "Empfindlichkeit", "Sensibilité", "Sensibilidad", "Sensibilità", "かんど" },
     { "Calibrate", "Kalibrieren", "Calibrer", "Calibrar", "Calibra", "キャリブレーション" },
-    { "Reset to defaults", "Standardwerte", "Valeurs par défaut", "Restablecer", "Ripristina predefiniti", "しょきせっていに もどす" },
+    { "Reset to Defaults", "Standardwerte", "Valeurs par défaut", "Restablecer", "Ripristina predefiniti", "しょきせっていに もどす" },
     { "Back", "Zurück", "Retour", "Volver", "Indietro", "もどる" },
 };
 static Tr s_row_descs[ROWS] = {
@@ -103,7 +103,7 @@ static Tr s_row_descs[ROWS] = {
 };
 static Tr s_gate_octagon = { "GameCube octagon", "GameCube-Achteck", "Octogone GameCube",
                              "Octógono GameCube", "Ottagono GameCube", "はっかくけい" };
-static Tr s_gate_circle = { "Raw circle", "Kreis (roh)", "Cercle brut", "Círculo", "Cerchio", "まる" };
+static Tr s_gate_circle = { "Raw Circle", "Kreis (roh)", "Cercle brut", "Círculo", "Cerchio", "まる" };
 static Tr s_no_pad = { "No controller connected", "Kein Controller angeschlossen", "Aucune manette branchée",
                        "No hay ningún mando", "Nessun controller collegato", "コントローラーが ありません" };
 static Tr s_kb_note = { "Keyboard: WASD gives full GameCube stick tilt.",

@@ -87,6 +87,52 @@ the same input. Function and table addresses are noted at each function.
 `tools/musyxfx/` checks the port bit for bit against the DOL code run in a
 Gekko interpreter (`build_fxtest.sh`, then `fxcheck.py`).
 
+## Mixer (Options > Sound)
+
+The game's Sound page (sel_ngc `fn_3_1119C`, one row: Sound Setting = mono /
+stereo) is replaced on PC by `pc_sound_page_*` (pc_settings_menu.c): the same
+row, then five sliders (0-100 % in steps of 10, applied live, saved to
+settings.dat `volume` / `vol_music` / `vol_sfx` / `vol_voice` / `vol_timer`).
+The page keeps the original's behaviour around it (menu music raised to full
+volume while open, a random monkey voice from a random side every second as
+a speaker test). Each slider step plays a preview: the cursor sound for
+Master, Music and Sound Effects, a monkey voice for Voices, the timer tick
+for Timer Warning.
+
+Every DSP voice and stream carries a category (`ADSP_CAT_*`, audio_dsp.h);
+the worker scales it by that category's volume (ramped over one tick, also
+the voice's aux sends) and then the mix by Master. Nothing in the game data
+or the synth changes, so the game sees the same voices and timings.
+
+* **Music**: `snd/stream/` streams (smgr.c `fn_1_393B0` passes the file to
+  `pc_snd_stream_file` before `sndStreamActivate`). `snd/stream_se/`
+  streams (ambiences, story cutscene sound tracks) count as sound effects.
+* **Cues**: sound.c `g_smth_calls_sndFXStartParaInfo` passes the cue's index
+  in the sound table (`lbl_1_rodata_148C`, 0x5B8 entries) to `pc_snd_fx_cue`
+  right before its `sndFXStartParaInfo`; voices a SoundMacro starts inherit
+  the category. `pc_sound_cat.c` classifies the table once by its group and
+  the sound designers' names:
+  * Timer: `SND_SED_NAR_N4_ES` (index 166, group nar, fx 0xA4, cue 6), the
+    only timer sound. `smd_game_play_tick` (game_mode.c) plays it every
+    second of a Story / Challenge stage (above 10 s left as `0x3D806`, i.e.
+    5 below full volume), from 10 s on at full volume with the announcer's
+    count (cues 35-44, voices) plus a second tick per second, from 5 s on a
+    third; Monkey Bowling's 5-4-3-2-1 countdown uses the same cue. Checked
+    against Dolphin: the GameCube ticks every second for the whole stage
+    too (660 Hz tone, same level relative to the music within 1 dB).
+  * Voice: `SND_SED_VO*` (monkeys), `SND_SED_NAR_*` (announcer, incl. HURRY
+    UP) except the effects filed in that group (FALL00-02, OP_TRN, RST5,
+    HAMMER*, RAIN*), `SFXgoli_*` (GonGon), group `GRPs1a_set` (cutscene
+    voices), `SFXna_*` / `SFXna2_*`, flags & 0x70 == 0x40 (the announcer
+    lines of the party games; 0x4050 / 0x4060 are stereo jingles) and the
+    alternates `<voice>_1` / `<voice>_boat`.
+  * Sound effect: everything else, and anything started without a cue
+    (baseball's own `sndFXStartEx`).
+  `SMB2_MIXCAT_DUMP=1` prints the whole table with its categories.
+* `[audio] mixer <cat>` lines at exit give each category's peak and RMS
+  (after its volume, before Master and the limiter); `SMB2_MIXLOG=1` prints
+  the same per second of output (`[mixlog]`).
+
 ## Output
 
 The worker mixes voices, streams and aux returns, applies the user volume and

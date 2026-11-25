@@ -45,6 +45,8 @@ s32 did_any_pad_press_input(u32 input);          /* sel_ngc.c */
 void g_b_button_pressed_on_menu(s32 arg0);       /* sel_ngc.c */
 void fn_3_140CC(int counter);                    /* sel_ngc_sprite.c */
 void C_MTXOrtho(Mtx44 m, float t, float b, float l, float r, float n, float f);
+float textdraw_get_pixel_width_of_string(char *str);
+#define OS_SOUND_MODE_MONO 0u
 extern s32 g_smth_with_sprite_draw_reqs_widescreen; /* bitmap.c */
 #define menuWork ((struct SelNgcMenuWork *)&g_currently_visible_menu_screen)
 
@@ -66,61 +68,129 @@ int pc_game_wide_mode(void) { return modeCtrl.wideMode; }
 void pc_game_set_wide_mode(int wide) { modeCtrl.wideMode = wide ? 1 : 0; }
 
 /* ======================================================================
- * Rows: the game's 2 rows, then the PC items, then Quit to Desktop.
+ * Rows of the three lists:
+ *  LV_PAGE     Options > Game Screen: the game's 2 rows, the PC items except
+ *              the master volume (it is on the Sound page), Quit to Desktop
+ *  LV_OVERLAY  F1 overlay: all PC items, Quit to Desktop
+ *  LV_SOUND    Options > Sound: the game's Sound Setting (mono / stereo) row,
+ *              then the mixer sliders (pcs_mix_*)
  * ====================================================================== */
+enum { LV_PAGE, LV_OVERLAY, LV_SOUND };
 #define GAME_ROWS 2
-#define QUIT_ROW (GAME_ROWS + PCS_ITEM_COUNT)
+#define PAGE_ITEMS (PCS_ITEM_COUNT - 1)
+#define QUIT_ROW (GAME_ROWS + PAGE_ITEMS)
 #define ROW_COUNT (QUIT_ROW + 1)
 #define ROW_SPACING 20.5f   /* F1 overlay: 14 rows */
-/* the Options page has to fit 16 rows (2 game + 13 PC + Quit) above the
+/* the Options page has to fit 15 rows (2 game + 12 PC + Quit) above the
  * game's description box */
 #define PAGE_ROW_SPACING 17.5f
 #define PAGE_TEXT_SCALE_Y 0.8f
+#define OVERLAY_ROWS (PCS_ITEM_COUNT + 1)   /* PC items + Quit to Desktop */
+#define SOUND_ROWS (1 + PCS_MIX_COUNT)
 
-static const char *row_name(int r)
+/* Options > Sound page strings (sel_ngc_option.c) */
+extern char *lbl_3_data_10294[6];      /* "Sound Setting" */
+extern char **lbl_3_data_10358[2];     /* "Mono", "Stereo" */
+extern char *lbl_3_data_10340[6];      /* "This is the speaker setting." */
+
+/* PC item of a Game Screen page row (>= GAME_ROWS, < QUIT_ROW) */
+static int page_item(int r)
 {
-    if (r < GAME_ROWS) return lbl_3_data_F9B0[r].name[locale];
-    if (r == QUIT_ROW) return pc_quit_label();
-    return pcs_item_name(r - GAME_ROWS);
+    int i = r - GAME_ROWS;
+    return i >= PCS_ITEM_VOLUME ? i + 1 : i;
 }
 
-static const char *row_value(int r)
+static const char *quit_desc(void)
 {
-    if (r < GAME_ROWS) {
-        struct ScreenOption *opt = &lbl_3_data_F9B0[r];
-        return opt->options[*opt->value][locale];
+    static const char *const desc[6] = {
+        "Close the game and return to the desktop.",
+        "Spiel beenden und zum Desktop zurückkehren.",
+        "Quitter le jeu et revenir au bureau.",
+        "Cerrar el juego y volver al escritorio.",
+        "Chiudi il gioco e torna al desktop.",
+        "ゲームを おわって デスクトップに もどります。",
+    };
+    return pc_text_pick(desc);
+}
+
+static const char *row_name(int kind, int r)
+{
+    switch (kind) {
+    case LV_PAGE:
+        if (r < GAME_ROWS) return lbl_3_data_F9B0[r].name[locale];
+        if (r == QUIT_ROW) return pc_quit_label();
+        return pcs_item_name(page_item(r));
+    case LV_OVERLAY:
+        if (r == PCS_ITEM_COUNT) return pc_quit_label();
+        return pcs_item_name(r);
+    default:
+        if (r == 0) return lbl_3_data_10294[locale];
+        return pcs_mix_name(r - 1);
     }
-    if (r == QUIT_ROW) return "";
-    return pcs_item_value(r - GAME_ROWS);
 }
 
-static const char *row_desc(int r)
+static const char *row_value(int kind, int r)
 {
-    if (r < GAME_ROWS) return lbl_3_data_F9B0[r].desc[locale];
-    if (r == QUIT_ROW) {
-        static const char *const quit_desc[6] = {
-            "Close the game and return to the desktop.",
-            "Spiel beenden und zum Desktop zurückkehren.",
-            "Quitter le jeu et revenir au bureau.",
-            "Cerrar el juego y volver al escritorio.",
-            "Chiudi il gioco e torna al desktop.",
-            "ゲームを おわって デスクトップに もどります。",
-        };
-        return pc_text_pick(quit_desc);
+    static char buf[16];
+    switch (kind) {
+    case LV_PAGE:
+        if (r < GAME_ROWS) {
+            struct ScreenOption *opt = &lbl_3_data_F9B0[r];
+            return opt->options[*opt->value][locale];
+        }
+        if (r == QUIT_ROW) return "";
+        return pcs_item_value(page_item(r));
+    case LV_OVERLAY:
+        if (r == PCS_ITEM_COUNT) return "";
+        return pcs_item_value(r);
+    default:
+        if (r == 0) return lbl_3_data_10358[OSGetSoundMode() == OS_SOUND_MODE_MONO ? 0 : 1][locale];
+        snprintf(buf, sizeof buf, "%d%%", pcs_mix_get(r - 1));
+        return buf;
     }
-    return pcs_item_desc(r - GAME_ROWS);
 }
 
-static int row_enabled(int r)
+static const char *row_desc(int kind, int r)
 {
-    if (r < GAME_ROWS || r == QUIT_ROW) return 1;
-    return pcs_item_enabled(r - GAME_ROWS);
+    switch (kind) {
+    case LV_PAGE:
+        if (r < GAME_ROWS) return lbl_3_data_F9B0[r].desc[locale];
+        if (r == QUIT_ROW) return quit_desc();
+        return pcs_item_desc(page_item(r));
+    case LV_OVERLAY:
+        if (r == PCS_ITEM_COUNT) return quit_desc();
+        return pcs_item_desc(r);
+    default:
+        if (r == 0) return lbl_3_data_10340[locale];
+        return pcs_mix_desc(r - 1);
+    }
+}
+
+static int row_enabled(int kind, int r)
+{
+    switch (kind) {
+    case LV_PAGE:
+        if (r < GAME_ROWS || r == QUIT_ROW) return 1;
+        return pcs_item_enabled(page_item(r));
+    case LV_OVERLAY:
+        if (r == PCS_ITEM_COUNT) return 1;
+        return pcs_item_enabled(r);
+    default:
+        return 1;
+    }
+}
+
+/* 0..100 for a slider row, else -1 */
+static int row_slider(int kind, int r)
+{
+    return (kind == LV_SOUND && r >= 1) ? pcs_mix_get(r - 1) : -1;
 }
 
 /* ======================================================================
  * Shared list drawing (game's option-page style, fn_3_201C8)
  * ====================================================================== */
 struct ListView {
+    int kind;            /* LV_* */
     int first, count;    /* rows to show */
     int cursor, editing, timer;
     float x, y;          /* first row's name position */
@@ -140,6 +210,42 @@ static u32 glow_color(int timer)
 {
     u32 g = (u32)(64.0 * fabs(math_sin((s16)(timer * 0x180))));
     return g | (g << 8) | (g << 16);
+}
+
+/* Sound page slider: ten of the font's own blocks (SJIS 0x81A1), lit up to
+ * the value in the selected-row yellow, the rest dim, then the value. */
+#define SLIDER_BLOCKS 10
+#define SLIDER_SCALE_X 0.55f
+static void draw_slider(const struct ListView *v, float y, int pct, int sel)
+{
+    static char block[3] = { (char)0x81, (char)0xA1, 0 };
+    float bw, x0;
+    int i, lit = (pct * SLIDER_BLOCKS + 50) / 100;
+
+    textdraw_reset();
+    textdraw_set_font(3);
+    textdraw_set_flags(0xA0000000U);
+    textdraw_set_scale(SLIDER_SCALE_X, 0.6f * v->textScaleY);
+    bw = textdraw_get_pixel_width_of_string(block) + 1.0f;
+    x0 = v->valueX - 0.5f * bw * SLIDER_BLOCKS;
+    for (i = 0; i < SLIDER_BLOCKS; i++) {
+        if (i < lit) {
+            textdraw_set_mul_color(sel ? 0xFFFF40U : 0xC0C040U);
+            textdraw_set_add_color(sel ? glow_color(v->timer) : 0U);
+        } else {
+            textdraw_set_mul_color(0x504830U);
+            textdraw_set_add_color(0U);
+        }
+        textdraw_set_pos(x0 + bw * (float)i, y + 4.0f * v->textScaleY);
+        textdraw_print(block);
+    }
+    textdraw_reset();
+    textdraw_set_font(3);
+    textdraw_set_flags(0xA0000000U);
+    textdraw_set_scale(0.8f, v->textScaleY);
+    textdraw_set_alignment(6);
+    textdraw_set_pos(v->valueX + 0.5f * bw * SLIDER_BLOCKS + 72.0f, y);
+    textdraw_printf("%d%%", pct);
 }
 
 static void draw_list(const struct ListView *v)
@@ -189,7 +295,8 @@ static void draw_list(const struct ListView *v)
         int r = v->first + i;
         float y = v->y + v->spacing * (float)i;
         int sel = (r == v->cursor);
-        int en = row_enabled(r);
+        int en = row_enabled(v->kind, r);
+        int pct = row_slider(v->kind, r);
 
         /* underline (scaled "_") */
         textdraw_reset();
@@ -233,20 +340,24 @@ static void draw_list(const struct ListView *v)
         if (!en)
             textdraw_set_mul_color(0x808080U);
         textdraw_set_pos(v->x, y);
-        textdraw_print((char *)row_name(r));
+        textdraw_print((char *)row_name(v->kind, r));
+        if (pct >= 0) {
+            draw_slider(v, y, pct, sel);
+            continue;
+        }
         textdraw_set_alignment(3);
         textdraw_set_pos(v->valueX, y);
         if (v->editing && sel)
-            textdraw_printf("<%s>", row_value(r));
+            textdraw_printf("<%s>", row_value(v->kind, r));
         else
-            textdraw_print((char *)row_value(r));
+            textdraw_print((char *)row_value(v->kind, r));
     }
 
     if (!pc_quit_confirm_active()) {
         textdraw_reset();
         fn_3_140CC(v->timer);
         textdraw_set_pos(320.0f, v->descY);
-        textdraw_print_and_fit_to_width(390.0f, (char *)row_desc(v->cursor));
+        textdraw_print_and_fit_to_width(390.0f, (char *)row_desc(v->kind, v->cursor));
     }
 
     if (v->hint != NULL) {
@@ -279,6 +390,7 @@ static void page_draw(struct Sprite *sprite)
     struct ListView v;
 
     memset(&v, 0, sizeof(v));
+    v.kind = LV_PAGE;
     v.first = 0;
     v.count = ROW_COUNT;
     v.cursor = s_page.cursor;
@@ -308,7 +420,7 @@ void pc_screen_page_create(void)
     sprite = create_sprite();
     if (sprite != NULL) {
         sprite->x = 170.0f;
-        sprite->y = 84.0f;   /* 16 rows at 17.5 px end above the description box */
+        sprite->y = 84.0f;   /* 15 rows at 17.5 px end above the description box */
         sprite->tag = 0x5D;
         sprite->drawFunc = page_draw;
         strcpy(sprite->text, "screen");
@@ -357,24 +469,24 @@ void pc_screen_page_tick(void)
                 sound |= 8;
                 pc_quit_confirm_open();
                 s_page.state = 2;
-            } else if (s_page.cursor == GAME_ROWS + PCS_ITEM_CONTROLLERS) {
+            } else if (s_page.cursor >= GAME_ROWS && page_item(s_page.cursor) == PCS_ITEM_CONTROLLERS) {
                 /* Controller Sticks screen, modal at the end of this frame */
                 sound |= 8;
                 pc_stick_screen_request();
-            } else if (s_page.cursor == GAME_ROWS + PCS_ITEM_UPDATES) {
+            } else if (s_page.cursor >= GAME_ROWS && page_item(s_page.cursor) == PCS_ITEM_UPDATES) {
                 /* Updates screen (pc_update_ui.c), modal at the end of this frame */
                 sound |= 8;
                 pc_update_screen_request();
-            } else if (s_page.cursor == GAME_ROWS + PCS_ITEM_MEMCARD) {
+            } else if (s_page.cursor >= GAME_ROWS && page_item(s_page.cursor) == PCS_ITEM_MEMCARD) {
                 /* Memory Card screen (pc_memcard_ui.c), modal at the end of this frame */
                 sound |= 8;
                 pc_memcard_screen_request();
-            } else if (row_enabled(s_page.cursor)) {
+            } else if (row_enabled(LV_PAGE, s_page.cursor)) {
                 sound |= 8;
                 if (s_page.cursor < GAME_ROWS)
                     s_page.savedValue = *lbl_3_data_F9B0[s_page.cursor].value;
                 else
-                    pcs_item_begin_edit(s_page.cursor - GAME_ROWS);
+                    pcs_item_begin_edit(page_item(s_page.cursor));
                 s_page.state = 1;
             } else {
                 sound |= 0x10;
@@ -405,7 +517,7 @@ void pc_screen_page_tick(void)
             s_page.state = 0;
         }
     } else {
-        int item = s_page.cursor - GAME_ROWS;
+        int item = page_item(s_page.cursor);
         if (did_any_pad_press_input(0) != 0) {
             if (pcs_item_step(item, -1)) sound |= 2;
         } else if (did_any_pad_press_input(1) != 0) {
@@ -432,6 +544,201 @@ void pc_screen_page_tick(void)
 }
 
 /* ======================================================================
+ * 3. Options > Sound page (sel_ngc.c fn_3_1119C calls these instead of
+ *    fn_3_23DE4 / fn_3_23EA8 / fn_3_242B4, #ifndef __MWERKS__ hook)
+ *
+ * The original page has one row, Sound Setting (Mono / Stereo: A to edit,
+ * left/right to change, A to keep, B to restore), raises the menu music to
+ * full volume while it is open and plays a random monkey voice from a
+ * random side every second as a speaker test.  The PC page keeps all of
+ * that and adds the mixer sliders below the row (pcs_mix_*, applied live,
+ * saved to settings.dat): up/down pick a row, left/right move a slider at
+ * once, each step plays a preview of that channel (the cursor sound for
+ * Master / Music / Sound effects, a monkey voice, the timer tick).
+ * ====================================================================== */
+#define SOUND_ROW_SPACING 32.0f   /* the game's option pages (fn_3_201C8) */
+static struct {
+    s32 state;      /* 0 choosing a row, 1 editing Mono / Stereo */
+    s32 cursor;
+    s32 savedMode;  /* Mono / Stereo restored on B */
+    s32 timer;
+    s32 lastVoice;  /* speaker test: last cue */
+    s32 dirty;      /* mixer changed since the last save */
+    s32 idle;       /* frames since the last mixer change */
+    s32 previewWait;/* frames until the next voice / timer preview */
+} s_snd;
+
+int rand(void);
+
+static void sound_page_draw(struct Sprite *sprite)
+{
+    struct ListView v;
+
+    memset(&v, 0, sizeof(v));
+    v.kind = LV_SOUND;
+    v.first = 0;
+    v.count = SOUND_ROWS;
+    v.cursor = s_snd.cursor;
+    v.editing = (s_snd.state == 1);
+    v.timer = s_snd.timer;
+    v.x = sprite->x;
+    v.y = sprite->y;
+    v.valueX = sprite->x + 242.0f;
+    v.spacing = SOUND_ROW_SPACING;
+    v.textScaleY = 1.0f;
+    v.boxBmp = 0x1701;
+    v.boxCX = 320.0f;
+    v.boxW = 470.0f;
+    v.boxH = v.spacing * (SOUND_ROWS - 1) + 24.0f + 40.0f;
+    v.boxCY = sprite->y + (v.spacing * (SOUND_ROWS - 1) + 24.0f) * 0.5f;
+    v.bullet = 1;
+    v.descY = 400.0f;
+    draw_list(&v);
+}
+
+void pc_sound_page_create(void)
+{
+    struct Sprite *sprite;
+
+    memset(&s_snd, 0, sizeof(s_snd));
+    s_snd.lastVoice = -1;
+    g_change_music_volume(are_all_party_games_unlocked() != 0 ? 0x5A : 5, 0x1EU, 0x64);
+    sprite = create_sprite();
+    if (sprite != NULL) {
+        sprite->x = 150.0f;
+        sprite->y = 210.0f - 12.0f - SOUND_ROW_SPACING * (SOUND_ROWS - 1) * 0.5f;
+        sprite->tag = 0x5C;
+        sprite->drawFunc = sound_page_draw;
+        strcpy(sprite->text, "sound");
+    }
+}
+
+void pc_sound_page_destroy(void)
+{
+    pcs_mix_save();
+    g_change_music_volume(are_all_party_games_unlocked() != 0 ? 0x5A : 5, 0x1EU, 0x3C);
+    destroy_sprite_with_unique_id(0x5C);
+}
+
+/* a monkey voice (the speaker test's first cue) or the timer tick, centred */
+static void sound_preview(int ch)
+{
+    if (ch == PCS_MIX_VOICE) {
+        g_smth_with_sound = 0;
+        g_player_id_for_sound = 0;
+        call_SoundReqID_arg_0(0x12D);
+    } else if (ch == PCS_MIX_TIMER) {
+        g_player_id_for_sound = 0;
+        call_SoundReqID_arg_0(6);
+    }
+}
+
+void pc_sound_page_tick(void)
+{
+    u32 sound = 0;
+    s32 sel;
+    int idle = (menuWork->unkC == 0 && menuWork->unk18 == 0);
+
+    if (s_snd.previewWait > 0)
+        s_snd.previewWait--;
+    if (s_snd.state == 0) {
+        sel = s_snd.cursor;
+        if (did_any_pad_press_input(2) != 0) {
+            if (--sel < 0) sel = SOUND_ROWS - 1;
+        } else if (did_any_pad_press_input(3) != 0) {
+            if (++sel >= SOUND_ROWS) sel = 0;
+        }
+        if (sel != s_snd.cursor) {
+            sound |= 2;
+            s_snd.cursor = sel;
+        } else if (s_snd.cursor >= 1) {
+            int ch = s_snd.cursor - 1, v = pcs_mix_get(ch), dir = 0;
+            if (did_any_pad_press_input(0) != 0) dir = -1;
+            else if (did_any_pad_press_input(1) != 0) dir = 1;
+            if (dir != 0) {
+                /* next multiple of the step in that direction */
+                v = dir > 0 ? (v / PCS_MIX_STEP + 1) * PCS_MIX_STEP
+                            : ((v + PCS_MIX_STEP - 1) / PCS_MIX_STEP - 1) * PCS_MIX_STEP;
+                if (pcs_mix_set(ch, v)) {
+                    s_snd.dirty = 1;
+                    s_snd.idle = 0;
+                    if (ch == PCS_MIX_VOICE || ch == PCS_MIX_TIMER) {
+                        if (s_snd.previewWait == 0) {
+                            sound_preview(ch);
+                            s_snd.previewWait = 12;
+                        }
+                    } else {
+                        sound |= 2;
+                    }
+                } else {
+                    sound |= 0x10;   /* at the end of the slider */
+                }
+            }
+        }
+        if (did_any_pad_press_input(6) != 0 && idle) {
+            if (s_snd.cursor == 0) {
+                sound |= 8;
+                s_snd.savedMode = OSGetSoundMode();
+                s_snd.state = 1;
+            } else if (s_snd.cursor - 1 == PCS_MIX_VOICE || s_snd.cursor - 1 == PCS_MIX_TIMER) {
+                sound_preview(s_snd.cursor - 1);
+            } else {
+                sound |= 8;
+            }
+        } else if (did_any_pad_press_input(7) != 0 && idle) {
+            g_b_button_pressed_on_menu(1);
+        }
+    } else {
+        /* Sound Setting, as fn_3_23EA8 */
+        int mode = OSGetSoundMode() == OS_SOUND_MODE_MONO ? 0 : 1, m = mode;
+        if (did_any_pad_press_input(0) != 0 || did_any_pad_press_input(1) != 0)
+            m ^= 1;
+        if (m != mode) {
+            sound |= 2;
+            fn_1_367E4(m);
+        }
+        if (did_any_pad_press_input(6) != 0 && idle) {
+            sound |= 8;
+            s_snd.state = 0;
+        } else if (did_any_pad_press_input(7) != 0 && idle) {
+            sound |= 0x10;
+            fn_1_367E4(s_snd.savedMode);
+            s_snd.state = 0;
+        }
+    }
+
+    /* the original page's speaker test: a random monkey voice every second,
+     * panned around the listener (fn_3_23EA8) */
+    if ((g_font_char_var_3 % 60) == 0) {
+        static const s32 voices[4] = { 0x12D, 0x130, 0x12F, 0x12E };
+        s8 pan = (s8)(63.0f * math_sin((s16)(g_font_char_var_3 << 9)));
+        s8 span = (s8)(63.0f * math_sin((s16)((g_font_char_var_3 << 9) + 0x8000)));
+        s32 k = (s32)(rand() & 0x7FFF) >> 0xD;
+        s32 cue = voices[k];
+        if (cue == s_snd.lastVoice)
+            cue = voices[k & 4]; /* sic: always index 0 */
+        g_smth_with_sound = 0;
+        g_player_id_for_sound = 0;
+        call_SoundReqID_arg_0(((span & 0x7F) << 0x19) | (cue | 0x10000 | 0xF800 | ((pan & 0x7F) << 0x12)));
+        s_snd.lastVoice = cue;
+    }
+
+    if (sound & 2)
+        call_SoundReqID_arg_0(0x6C);
+    else if (sound & 8)
+        call_SoundReqID_arg_0(0x65);
+    else if (sound & 0x10)
+        call_SoundReqID_arg_0(0x66);
+
+    /* save once the sliders rest for a moment (and when the page closes) */
+    if (s_snd.dirty && ++s_snd.idle >= 90) {
+        pcs_mix_save();
+        s_snd.dirty = 0;
+    }
+    s_snd.timer += 1;
+}
+
+/* ======================================================================
  * 2. F1 overlay (modal, any screen)
  * ====================================================================== */
 static u16 pad_held(void)
@@ -452,8 +759,6 @@ static u16 pad_held(void)
     return b;
 }
 
-#define OVERLAY_ROWS (PCS_ITEM_COUNT + 1)   /* PC items + Quit to Desktop */
-
 static void overlay_draw(int cursor, int editing, int timer)
 {
     struct ListView v;
@@ -467,9 +772,10 @@ static void overlay_draw(int cursor, int editing, int timer)
     g_smth_with_sprite_draw_reqs_widescreen = 1;
 
     memset(&v, 0, sizeof(v));
-    v.first = GAME_ROWS;
+    v.kind = LV_OVERLAY;
+    v.first = 0;
     v.count = OVERLAY_ROWS;
-    v.cursor = GAME_ROWS + cursor;
+    v.cursor = cursor;
     v.spacing = ROW_SPACING;
     v.textScaleY = 0.95f;
     v.editing = editing;

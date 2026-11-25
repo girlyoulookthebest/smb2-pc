@@ -72,7 +72,7 @@ static Tr s_rows[NROWS] = {
       "Importa salvataggio...", "セーブを よみこむ..." },
     { "Export saves...", "Spielstände exportieren...", "Exporter les sauvegardes...", "Exportar partidas...",
       "Esporta salvataggi...", "セーブを かきだす..." },
-    { "Open save folder", "Speicherordner öffnen", "Ouvrir le dossier", "Abrir carpeta", "Apri cartella",
+    { "Open Save Folder", "Speicherordner öffnen", "Ouvrir le dossier", "Abrir carpeta", "Apri cartella",
       "フォルダを ひらく" },
     { "Back", "Zurück", "Retour", "Volver", "Indietro", "もどる" },
 };

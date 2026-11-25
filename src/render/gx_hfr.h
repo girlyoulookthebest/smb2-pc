@@ -46,6 +46,7 @@ void pc_hfr_view(int camera, const float (*mtx)[4]);
 void pc_hfr_node_alloc(void* node);
 void pc_hfr_node_begin(void* node, void* drawFunc);
 void pc_hfr_node_end(void);
+void pc_hfr_texslots(const unsigned* ids);
 
 #ifdef __cplusplus
 }

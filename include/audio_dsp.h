@@ -19,6 +19,16 @@
 #define ADSP_STREAM_SAMPLES 0x20520     /* samples in that ring */
 #define ADSP_AUX_GAINS     6            /* aux A L/R/S, aux B L/R/S */
 
+/* Mixer categories (docs/audio.md, "Mixer"): every voice and stream belongs
+ * to one; the worker scales it by that category's user volume. */
+enum {
+    ADSP_CAT_SFX = 0,     /* sound effects (default) */
+    ADSP_CAT_MUSIC,       /* music streams */
+    ADSP_CAT_VOICE,       /* announcer and monkey voices */
+    ADSP_CAT_TIMER,       /* stage timer ticks / countdown beeps */
+    ADSP_CATS
+};
+
 /* step: source samples per output frame, 32.32 fixed point */
 static inline uint64_t adsp_step_for_rate(double srcRate)
 {
@@ -27,13 +37,14 @@ static inline uint64_t adsp_step_for_rate(double srcRate)
 
 /* Sample voices: pcm stays owned by the caller until adsp_free() of it. */
 void adsp_voice_start(int v, const int16_t *pcm, uint32_t len, uint32_t loopStart,
-                      uint32_t loopLen, uint64_t step, float gainL, float gainR);
+                      uint32_t loopLen, uint64_t step, float gainL, float gainR, int cat);
 void adsp_voice_set(int v, uint64_t step, float gainL, float gainR);
 void adsp_voice_stop(int v);
 
 /* DSP-ADPCM streams (ring of ADSP_STREAM_SAMPLES samples) */
 void adsp_stream_upload(int s, uint32_t byteOff, const void *src, uint32_t bytes);
-void adsp_stream_start(int s, const int16_t coefs[16], uint64_t step, float gainL, float gainR);
+void adsp_stream_start(int s, const int16_t coefs[16], uint64_t step, float gainL, float gainR,
+                       int cat);
 void adsp_stream_set(int s, uint64_t step, float gainL, float gainR);
 void adsp_stream_stop(int s);
 
@@ -65,5 +76,8 @@ void adsp_free(void *p);            /* free() p on the worker, in command order 
 void adsp_tick(void);               /* render one tick */
 void adsp_flush(void);              /* publish queued commands to the worker */
 void adsp_set_master(float gain);   /* user volume (audio_set_master_volume) */
+/* user volume of one ADSP_CAT_* (audio_set_category_volume); applies to the
+ * voices and streams already playing, ramped over one tick */
+void adsp_set_category_gain(int cat, float gain);
 
 #endif

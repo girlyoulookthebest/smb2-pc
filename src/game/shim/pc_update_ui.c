@@ -41,12 +41,12 @@ static Tr s_t_title = { "Update available", "Update verfügbar", "Mise à jour d
                         "Actualización disponible", "Aggiornamento disponibile", "アップデートが あります" };
 static Tr s_t_version = { "Version %s  (you have %s)", "Version %s  (installiert: %s)", "Version %s  (vous avez la %s)",
                           "Versión %s  (tienes la %s)", "Versione %s  (hai la %s)", "バージョン %s（いまは %s）" };
-static Tr s_t_update = { "Update now", "Jetzt aktualisieren", "Mettre à jour", "Actualizar ahora", "Aggiorna ora",
+static Tr s_t_update = { "Update Now", "Jetzt aktualisieren", "Mettre à jour", "Actualizar ahora", "Aggiorna ora",
                          "いますぐ アップデート" };
-static Tr s_t_open = { "Open download page", "Download-Seite öffnen", "Page de téléchargement",
+static Tr s_t_open = { "Open Download Page", "Download-Seite öffnen", "Page de téléchargement",
                        "Abrir página de descarga", "Apri pagina download", "ダウンロードページ" };
 static Tr s_t_later = { "Later", "Später", "Plus tard", "Más tarde", "Più tardi", "あとで" };
-static Tr s_t_skip = { "Skip this version", "Version überspringen", "Ignorer cette version", "Omitir esta versión",
+static Tr s_t_skip = { "Skip This Version", "Version überspringen", "Ignorer cette version", "Omitir esta versión",
                        "Salta questa versione", "このバージョンは スキップ" };
 static Tr s_t_note_inst = {
     "Update now downloads Setup, checks it and installs it. Your saves and settings are kept.",
@@ -152,9 +152,9 @@ static Tr s_u_installed = { "installed", "installiert", "installée", "instalada
 static Tr s_u_portable = { "portable", "portabel", "portable", "portable", "portatile", "ポータブルばん" };
 enum { UROW_AUTO, UROW_NOW, UROW_BACK, UROWS };
 static Tr s_u_rows[UROWS] = {
-    { "Check automatically", "Automatisch suchen", "Vérifier automatiquement", "Buscar automáticamente",
+    { "Check Automatically", "Automatisch suchen", "Vérifier automatiquement", "Buscar automáticamente",
       "Controlla automaticamente", "じどうで さがす" },
-    { "Check now", "Jetzt suchen", "Vérifier maintenant", "Buscar ahora", "Controlla ora", "いますぐ さがす" },
+    { "Check Now", "Jetzt suchen", "Vérifier maintenant", "Buscar ahora", "Controlla ora", "いますぐ さがす" },
     { "Back", "Zurück", "Retour", "Volver", "Indietro", "もどる" },
 };
 static Tr s_u_descs[UROWS] = {

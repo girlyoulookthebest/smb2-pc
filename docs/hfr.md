@@ -13,8 +13,8 @@ replayed** (section 9).
 
 ## 1. Using it
 
-* **Options > Game Screen > Frame rate** and the **F1 overlay** row
-  "Frame rate": `60` (default, no interpolation) -> `Display (N)` (the
+* **Options > Game Screen > Frame Rate** and the **F1 overlay** row
+  "Frame Rate": `60` (default, no interpolation) -> `Display (N)` (the
   monitor's refresh rate) -> `120` -> `144` -> `165` -> `240` ->
   `Uncapped`.  Applies immediately (next tick), no restart.
 * `settings.dat`: `fps=60|display|120|144|165|240|uncapped|<n>`.
@@ -125,7 +125,11 @@ per pair).
   their size: element-wise blending shrinks a 60 deg/tick spin by 13% at the
   midpoint).  Mirrored transforms keep their reflection.
 * Texture matrices element-wise; scroll translations that wrapped by whole
-  repeats blend the short way, other jumps keep the base value.
+  repeats blend the short way; any other jump keeps the whole base matrix
+  (blending some elements and not others projected the 3-4 DRIBBLES drop
+  shadows over a whole floor).  A pair drawn under different
+  `HFR_TEXSLOTS` sets (section 3) keeps its TEV colours as drawn and blends
+  each projection slot with the other draw's slot of the same caster.
 * CPU-transformed vertices (skinned monkeys, effects, 2D sprites): position,
   normal and colour lerp; UVs as drawn.
 * TEV: light positions / directions / colours, konst and register colours,
@@ -152,6 +156,8 @@ per pair).
 | `HFR_TAG(MINI, player)` | race2_2.c `fn_10_D090` racer labels | one label model coloured per racer, depth-sorted: overtakes swapped the pairing and in-between frames showed a label in a blend of two racers' colours |
 | `HFR_TAG(BG, list/index)` | background.c `g_render_foreground_objects` | stage background / foreground models repeat one mesh and are culled or blinked one by one (bowling marquee bulbs): each change shifted the pairing of the copies after it |
 | `HFR_TAG(STAGE_INST, j)` | stage_draw.c `g_draw_stage_models`, model references and instances inside the item group's tag | many copies of one model (title-screen palms): one leaving the view made a palm crown fly between two palms |
+| `HFR_TEXSLOTS(casters)` | shadow_tex.c `g_some_shadow_draw_func` | a stage model receives projected shadows by being drawn again once per group of up to four casters (depth test EQUAL), caster k projecting through texcoords 2k / 2k+1.  Which casters land in which group and slot changes as they come into range (3-4 DRIBBLES drops).  The receiver draw still pairs with its own receiver (its geometry must blend exactly like the receiver's base draw or the depth-equal test drops the shadow); its projections blend slot by slot with the slot of the same caster in the other tick's draw, a caster only in one tick keeps that tick's projection.  Blending another caster's matrix put a shadow over a whole platform for two in-between frames, then none; keeping every projection unblended when the set changed made a shadow stand still for half a tick |
+| `HFR_TAG(SHADOW, caster)` | shadows.c `fn_1_5C60C`, background.c `fn_1_709A8` | caster silhouettes rendered into the shadow textures: each pairs with the same caster's silhouette |
 | `HFR_NODE_ALLOC/BEGIN/END` | ord_tbl.c | depth-sorted draws (drawn later, in another order) keep the tag they were queued under |
 | `HFR_VIEW(cam, view)` | camera.c `camera_apply_viewport[_2]`, default projection | camera view per tick: cut when it turns > 43 deg or moves more than 3x its speed + 3 units in one tick |
 | `HFR_CUT(CAMERA_RESET)` | camera.c `camera_clear` | stage start, respawn, replay / mode camera resets.  Soft: cuts only if a camera view then moved more than 1.5x its recent speed + 0.5 units or turned > 10 deg (baseball's intro pan resets its camera every tick while panning smoothly) |

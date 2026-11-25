@@ -54,7 +54,7 @@ Ball 2 (USA, GM2E8P) game data save is used (replays and saves of other games ar
 - A real memory card: dump it with the GCMM homebrew on a softmodded Wii or GameCube
   (to .raw or .gci).
 Then either:
-- Options > Game Screen > Memory card (or F1) > Import a save..., pick the file. An existing
+- Options > Game Screen > Memory Card (or F1) > Import a save..., pick the file. An existing
   save is copied to memcard\backup\ first (the game asks before replacing it). The game then
   closes; start it again to play with the imported save.
 - or put the file in %APPDATA%\SMB2\installed\memcard\import\ and start the game; it is

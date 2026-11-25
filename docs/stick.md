@@ -91,7 +91,7 @@ Controllers. It shows both sticks:
 * Below each stick: the raw host value, then the GC pad value, then the value
   the game plays with (60 is full tilt).
 
-The rows are Controller, Stick gate, Dead zone, Sensitivity, Calibrate,
+The rows are Controller, Stick Gate, Dead Zone, Sensitivity, Calibrate,
 Reset to defaults and Back.
 
 ### How to calibrate
