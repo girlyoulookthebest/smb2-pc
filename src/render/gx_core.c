@@ -1258,6 +1258,10 @@ void GXSetDispCopySrc(uint16_t left, uint16_t top, uint16_t width, uint16_t heig
         s_gc_fb_h = (float)height;
         fprintf(stderr, "[video] EFB height %u\n", (unsigned)height);
         pc_out_rect_update();
+        /* the backend viewport/scissor were mapped with the old EFB height;
+         * the GX state is unchanged, and the game's cached scissor setter
+         * (gxcache.c) does not resend it */
+        pc_reapply_gx_view();
     }
 }
 
@@ -1294,6 +1298,14 @@ uint16_t GXGetTexObjWidth(GXTexObj* obj)  { return obj ? obj->width : 0; }
 uint16_t GXGetTexObjHeight(GXTexObj* obj) { return obj ? obj->height : 0; }
 uint32_t GXGetTexObjFmt(GXTexObj* obj)    { return obj ? obj->format : 0; }
 void*    GXGetTexObjData(GXTexObj* obj)   { return obj ? obj->image_data : NULL; }
+/* point a texture object at other texels of the same size and format
+ * (Monkey Billiards draws every numbered ball with one model, swapping its
+ * texture's data per ball) */
+void GXInitTexObjData(GXTexObj* obj, void* image)
+{
+    if (!obj || obj->image_data == image) return;
+    GXInitTexObj(obj, image, obj->width, obj->height, (int)obj->format, obj->wrapS, obj->wrapT, obj->mipmap);
+}
 uint8_t  GXGetTexObjWrapS(GXTexObj* obj)  { return obj ? obj->wrapS : 0; }
 uint8_t  GXGetTexObjWrapT(GXTexObj* obj)  { return obj ? obj->wrapT : 0; }
 uint8_t  GXGetTexObjMipMap(GXTexObj* obj) { return obj ? obj->mipmap : 0; }
@@ -2676,11 +2688,15 @@ void GXSetIndTexCoordScale(int indStage, int scaleS, int scaleT) {
     s_gx.ind_scale[indStage][1] = scaleT;
 }
 
-/* id: GX_ITM_0..2 = 1..3 (the hardware has no other static matrices);
- * elements are stored as s0.10 fixed point like the BP registers */
+/* id: GX_ITM_0..2 = 1..3, GX_ITM_S0..S2 = 5..7, GX_ITM_T0..T2 = 9..11.
+ * The hardware has three matrix register sets; like the SDK, an S/T id
+ * writes the set of the same index (matrix and scale), and the dynamic
+ * S/T modes then read that set's scale (Dolphin: indtexmtx[(id & 3) - 1].w).
+ * Elements are stored as s0.10 fixed point like the BP registers. */
 void GXSetIndTexMtx(int id, const float mtx[2][3], int scaleExp) {
-    int i, j, k = id - 1;
-    if (k < 0 || k >= 3 || !mtx) return;
+    int i, j, k = (id >= 1 && id <= 3) ? id - 1 : (id >= 5 && id <= 7) ? id - 5
+                : (id >= 9 && id <= 11) ? id - 9 : -1;
+    if (k < 0 || !mtx) return;
     gxfx_touch();
     for (i = 0; i < 2; i++)
         for (j = 0; j < 3; j++) {

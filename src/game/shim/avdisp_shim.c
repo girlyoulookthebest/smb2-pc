@@ -328,6 +328,24 @@ static int decode_wrap(u32 field)   /* 0 CLAMP, 1 REPEAT, 2 MIRROR */
     return 0;                       /* GX_CLAMP */
 }
 
+/* DOL 0x80066C40: set the TEV colour (low nibble) and alpha (high nibble)
+ * blend modes of the model's layers using texture `texIdx` (layer byte 0xD);
+ * the original stores (word & 0xFF) | modes into the big-endian word at 0x10,
+ * i.e. clears bytes 0x10-0x12 and ORs the modes into byte 0x13 */
+void fn_80066C40(struct GMAModel *model, int texIdx, int colorMode, int alphaMode)
+{
+    struct GMATevLayer *layers = (struct GMATevLayer *)((u8 *)model + 0x40);
+    u8 modes = (u8)(((alphaMode & 0xF) << 4) | (colorMode & 0xF));
+    int i;
+
+    for (i = 0; i < model->tevLayerCount; i++) {
+        if (((u8 *)&layers[i])[0xD] != (u8)texIdx)
+            continue;
+        layers[i].blendMode[0] = layers[i].blendMode[1] = layers[i].blendMode[2] = 0;
+        layers[i].blendMode[3] |= modes;
+    }
+}
+
 void g_init_gma_texture(struct GMATevLayer *layer,
                         struct TPLTextureHeader *texHeader, struct TPL *tpl)
 {

@@ -41,6 +41,7 @@ struct PauseMenuState
 extern struct PauseMenuState g_related_to_pause_menu_input;
 extern u8 lbl_1_bss_16D0;    /* sel.c struct SelSettings8: race settings, byte 0 = course */
 extern u8 lbl_1_bss_172C[];  /* sel.c struct SelSettingsH: baseball settings */
+extern u8 lbl_1_bss_16F0[];  /* sel.c: billiards settings (bytes 6/7) */
 
 void g_set_some_sel_ngc_global_func_ptrs(void (*a)(void), void (*b)(void),
                                          void (*c)(void), void (*d)(void));
@@ -81,6 +82,7 @@ static const struct LauncherEntry s_entries[] = {
     { L_MINI, "MONKEY BASEBALL", 0xC9, 15 },
     { L_MINI, "MONKEY GOLF",     0xBB, 8 },
     { L_MINI, "MONKEY FIGHT",    0xBD, 4 },
+    { L_MINI, "MONKEY BILLIARDS", 0xAD, 6 },
 };
 #define N_ENTRIES ((int)(sizeof(s_entries) / sizeof(s_entries[0])))
 
@@ -239,6 +241,17 @@ static void launcher_start(const struct LauncherEntry *e)
         if (e->arg1 == 8) {
             modeCtrl.courseFlags |= 4;
             g_related_to_pause_menu_input.flags &= ~2u;
+        }
+        /* Billiards: what sel_ngc's mode/rule menus and menu_start_billiards
+         * set (sel.c lbl_1_bss_16F0: byte 6 = Vs. Mode 0 / Tournament 1, byte 7 = rule
+         * 0-3).  Test hook: SMB2_PC_BILLIARDS=<rule> */
+        if (e->arg1 == 6) {
+            modeCtrl.courseFlags |= 4;
+            g_related_to_pause_menu_input.flags &= ~2u;
+            modeCtrl.unk30 = 1;
+            modeCtrl.unk40 = 0;
+            lbl_1_bss_16F0[6] = 0;   /* Vs. Mode (1 = Tournament) */
+            lbl_1_bss_16F0[7] = getenv("SMB2_PC_BILLIARDS") ? (u8)atoi(getenv("SMB2_PC_BILLIARDS")) : 0;
         }
         break;
     }

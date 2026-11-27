@@ -233,6 +233,7 @@ extern void dogfightPrologue(void), dogfightEpilogue(void);
 extern void baseballPrologue(void), baseballEpilogue(void);
 extern void golfPrologue(void), golfEpilogue(void);
 extern void fightPrologue(void), fightEpilogue(void);
+extern void billiardsPrologue(void), billiardsEpilogue(void);
 void pc_test_dip_apply(void);   /* pc_launcher.c: SMB2_PC_DIP test hook */
 
 static const struct { const char *name; void (*pro)(void); void (*epi)(void); }
@@ -249,6 +250,7 @@ s_linked_rels[] = {
     { "mkb2.baseball.rel",         baseballPrologue,   baseballEpilogue },
     { "mkb2.golf2.rel",            golfPrologue,       golfEpilogue },
     { "mkb2.mini_fight2.rel",      fightPrologue,      fightEpilogue },
+    { "mkb2.rel_mini_billiards.rel", billiardsPrologue, billiardsEpilogue },
 };
 
 static int rel_find(const char *name)

@@ -487,6 +487,11 @@ void mtxa_sq_to_mtx(Mtx m)
     m[2][0] = MTXA[2][0]; m[2][1] = MTXA[2][1]; m[2][2] = MTXA[2][2];
 }
 
+void mtxa_to_mtxb(void)
+{
+    mtx_copy(MTXA, MTXB);
+}
+
 void mtxa_from_mtxb(void)
 {
     mtx_copy(MTXB, MTXA);
@@ -1315,6 +1320,42 @@ float quat_to_axis_angle(Quat *q, Vec *axis)
     axis->x = q->x; axis->y = q->y; axis->z = q->z;
     vec_normalize_len(axis);
     return 2.0f * acosf(w);
+}
+
+/* 0x80063194 (Monkey Billiards): quaternion inverse, conjugate / |q|^2,
+ * identity for a near-zero quaternion (SMB1 u_math_unk6) */
+void g_math_unk6(Quat *q)
+{
+    float len = q->x * q->x + q->y * q->y + q->z * q->z + q->w * q->w;
+
+    if (len < FLT_EPSILON) {
+        q->x = q->y = q->z = 0.0f;
+        q->w = 1.0f;
+    } else {
+        float r = 1.0f / len;
+        q->x = -q->x * r;
+        q->y = -q->y * r;
+        q->z = -q->z * r;
+        q->w = q->w * r;
+    }
+}
+
+/* 0x80063D5C / 0x80063D9C (Monkey Billiards): a quaternion's vector part
+ * through MTXA (rigid inverse), w copied (SMB1 u_math_unk10/11) */
+void g_math_unk10(Quat *a, Quat *b)
+{
+    Vec v = { a->x, a->y, a->z };
+    float w = a->w;
+    mtxa_tf_vec(&v, &v);
+    b->x = v.x; b->y = v.y; b->z = v.z; b->w = w;
+}
+
+void g_math_unk11(Quat *a, Quat *b)
+{
+    Vec v = { a->x, a->y, a->z };
+    float w = a->w;
+    mtxa_rigid_inv_tf_vec(&v, &v);
+    b->x = v.x; b->y = v.y; b->z = v.z; b->w = w;
 }
 
 /* 0x8006322C: tangential displacement of point `in` (radius r) under quat */

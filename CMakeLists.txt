@@ -220,6 +220,7 @@ if(SMB2_GAME)
         ${SMB2_DECOMP_DIR}/src/baseball/*.c
         ${SMB2_DECOMP_DIR}/src/golf2/*.c
         ${SMB2_DECOMP_DIR}/src/fight/*.c
+        ${SMB2_DECOMP_DIR}/src/billiards/*.c
         ${SMB2_DECOMP_DIR}/src/sel_ngc/*.c
     )
     if(CMAKE_SIZEOF_VOID_P EQUAL 8 AND NOT CMAKE_C_COMPILER_ID MATCHES "Clang")
@@ -342,6 +343,9 @@ if(SMB2_GAME)
     file(GLOB MINI_FIGHT_SOURCES ${SMB2_DECOMP_DIR}/src/fight/*.c)
     set_source_files_properties(${MINI_FIGHT_SOURCES} PROPERTIES
         COMPILE_DEFINITIONS "_prolog=fightPrologue;_epilog=fightEpilogue;_unresolved=fightUnresolved")
+    file(GLOB MINI_BILLIARDS_SOURCES ${SMB2_DECOMP_DIR}/src/billiards/*.c)
+    set_source_files_properties(${MINI_BILLIARDS_SOURCES} PROPERTIES
+        COMPILE_DEFINITIONS "_prolog=billiardsPrologue;_epilog=billiardsEpilogue;_unresolved=billiardsUnresolved")
 
     file(GLOB SEL_NGC_SOURCES ${SMB2_DECOMP_DIR}/src/sel_ngc/*.c)
     set_source_files_properties(${SEL_NGC_SOURCES} PROPERTIES

@@ -11,9 +11,9 @@ sounds); code mods (DOL edits, Gecko/AR codes) don't apply.
 
 Party games not playable yet
 ----------------------------
-Billiards, Shot, Soccer and Tennis are not decompiled yet, so the PC version can't run
-them. Party Game Select shows them dimmed with a "NOT YET" tag (they can still be unlocked
-with Play Points). Race, Target, Bowling, Boat, Dogfight, Baseball, Golf and Monkey Fight work.
+Shot, Soccer and Tennis are not decompiled yet, so the PC version can't run them. Party
+Game Select shows them dimmed with a "NOT YET" tag (they can still be unlocked with Play
+Points). Race, Target, Bowling, Boat, Dogfight, Baseball, Golf, Monkey Fight and Billiards work.
 
 Starting the game
 -----------------
